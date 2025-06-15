@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+  <meta charset="UTF-8">
+  <title>PuppeteerSharp 实例远程控制</title>
+  <style>
+    body { display: flex; flex-direction: row; }
+    #main { flex: 1; }
+    #sidebar { width: 320px; border-left: 1px solid #ccc; padding: 10px; background: #fafbfc; }
+    #screen { border: 1px solid #ccc; cursor: crosshair; }
+    #instanceList { font-size: 14px; }
+    #instanceList .item { margin-bottom: 8px; border-bottom: 1px dashed #ddd; padding-bottom: 4px; }
+    #instanceList .active { color: #1976d2; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <div id="main">
+    <button id="createBtn">创建浏览器实例</button>
+    <div>
+      实例ID: <span id="instanceId"></span>
+    </div>
+    <div style="position:relative;display:inline-block;">
+      <img id="screen" width="800" height="600" alt="browser screen" />
+      <div id="remote-cursor" style="position:absolute;left:0;top:0;width:20px;height:20px;pointer-events:none;display:none;z-index:10;">
+        <svg width="20" height="20"><circle cx="10" cy="10" r="6" fill="rgba(0,0,0,0.2)" stroke="#1976d2" stroke-width="2"/></svg>
+      </div>
+    </div>
+    <div id="msg"></div>
+    <div style="margin-top:20px;">
+      <input id="wsInput" type="text" placeholder="输入 wsEndpoint 远程连接" style="width:70%" />
+      <button id="connectRemoteBtn">远程连接</button>
+    </div>
+  </div>
+  <div id="sidebar">
+    <h3>实例列表</h3>
+    <div id="instanceList">加载中...</div>
+  </div>
+  <script>
+    let instanceId = '';
+    let ws = null;
+
+    async function loadInstanceList() {
+      const res = await fetch('/browsers');
+      if (!res.ok) return document.getElementById('instanceList').innerText = '加载失败';
+      const list = await res.json();
+      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'><div>ID: ${i.id}</div><div>UA: ${i.userAgent}</div><div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div><button onclick='selectInstance("${i.id}")'>切换</button> <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button></div>`).join('');
+      document.getElementById('instanceList').innerHTML = html || '暂无实例';
+    }
+
+    window.selectInstance = function(id) {
+      instanceId = id;
+      document.getElementById('instanceId').innerText = id;
+      startWebSocket();
+      loadInstanceList();
+    };
+
+    document.getElementById('createBtn').onclick = async function() {
+      let url = prompt('请输入要打开的URL：', 'https://www.example.com');
+      if (!url) return;
+      const res = await fetch('/browsers/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        instanceId = data.id;
+        document.getElementById('instanceId').innerText = instanceId;
+        startWebSocket();
+        loadInstanceList();
+      } else {
+        document.getElementById('msg').innerText = '创建失败';
+      }
+    };
+
+    document.getElementById('connectRemoteBtn').onclick = async function() {
+      const wsEndpoint = document.getElementById('wsInput').value.trim();
+      if (!wsEndpoint) return alert('请输入 wsEndpoint');
+      const res = await fetch('/browser/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ wsEndpoint })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        instanceId = data.id;
+        document.getElementById('instanceId').innerText = instanceId;
+        startWebSocket();
+        loadInstanceList();
+        document.getElementById('msg').innerText = '远程连接成功';
+      } else {
+        document.getElementById('msg').innerText = '远程连接失败';
+      }
+    };
+
+    window.copyWsEndpoint = function(e, ws) {
+      e.stopPropagation();
+      navigator.clipboard.writeText(ws).then(() => {
+        document.getElementById('msg').innerText = 'wsEndpoint 已复制到剪贴板';
+      });
+    };
+
+    function startWebSocket() {
+      if (!instanceId) return;
+      if (ws) ws.close();
+      ws = new WebSocket(`ws://${location.host}/browsers/ws/operate/${instanceId}`);
+      ws.binaryType = 'arraybuffer';
+      ws.onmessage = e => {
+        if (e.data instanceof ArrayBuffer) {
+          const url = URL.createObjectURL(new Blob([e.data], {type: 'image/jpeg'}));
+          const img = document.getElementById('screen');
+          img.src = url;
+          img.onload = () => URL.revokeObjectURL(url);
+          document.getElementById('msg').innerText = '';
+        } else if (typeof e.data === 'string') {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.error) {
+              document.getElementById('msg').innerText = '截图错误: ' + data.error;
+            }
+            if (data.cursor) {
+              // 后端同步指针
+              remoteCursor.style.left = (data.cursor.x-10) + 'px';
+              remoteCursor.style.top = (data.cursor.y-10) + 'px';
+              remoteCursor.style.display = 'block';
+            }
+          } catch {}
+        }
+      };
+      ws.onclose = () => document.getElementById('msg').innerText = 'WebSocket已关闭';
+      ws.onerror = () => document.getElementById('msg').innerText = 'WebSocket错误';
+    }
+
+    document.getElementById('screen').onclick = function(e) {
+      if (!ws || ws.readyState !== 1) return;
+      const img = e.target;
+      const rect = img.getBoundingClientRect();
+      const naturalWidth = img.naturalWidth || 800;
+      const naturalHeight = img.naturalHeight || 600;
+      const displayWidth = rect.width;
+      const displayHeight = rect.height;
+      const x = Math.round(e.offsetX * naturalWidth / displayWidth);
+      const y = Math.round(e.offsetY * naturalHeight / displayHeight);
+      ws.send(JSON.stringify({type: 'click', payload: {x, y}}));
+    };
+
+    let remoteCursor = document.getElementById('remote-cursor');
+    let screenImg = document.getElementById('screen');
+    screenImg.addEventListener('mousemove', function(e) {
+      if (!ws || ws.readyState !== 1) return;
+      const rect = screenImg.getBoundingClientRect();
+      const x = e.offsetX;
+      const y = e.offsetY;
+      ws.send(JSON.stringify({type: 'mousemove', payload: {x, y}}));
+      // 本地显示指针
+      remoteCursor.style.left = (x-10) + 'px';
+      remoteCursor.style.top = (y-10) + 'px';
+      remoteCursor.style.display = 'block';
+    });
+    screenImg.addEventListener('mouseleave', function() {
+      remoteCursor.style.display = 'none';
+    });
+    document.addEventListener('keydown', function(e) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({type: 'keydown', payload: {key: e.key, code: e.code, keyCode: e.keyCode}}));
+    });
+    document.addEventListener('keyup', function(e) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({type: 'keyup', payload: {key: e.key, code: e.code, keyCode: e.keyCode}}));
+    });
+    screenImg.addEventListener('wheel', function(e) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({type: 'wheel', payload: {deltaX: e.deltaX, deltaY: e.deltaY}}));
+    });
+
+    loadInstanceList();
+    setInterval(loadInstanceList, 5000);
+  </script>
+</body>
+</html>
