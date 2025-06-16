@@ -337,10 +337,10 @@
             <div class="header-content">
                 <div class="logo">🚀 高性能浏览器管理</div>
                 <div class="nav-tabs">
-                    <button class="nav-tab active" onclick="switchTab('dashboard')">仪表板</button>
-                    <button class="nav-tab" onclick="switchTab('instances')">实例管理</button>
-                    <button class="nav-tab" onclick="switchTab('performance')">性能分析</button>
-                    <button class="nav-tab" onclick="switchTab('alerts')">系统警报</button>
+                    <button class="nav-tab active" onclick="switchTab('dashboard', this)">仪表板</button>
+                    <button class="nav-tab" onclick="switchTab('instances', this)">实例管理</button>
+                    <button class="nav-tab" onclick="switchTab('performance', this)">性能分析</button>
+                    <button class="nav-tab" onclick="switchTab('alerts', this)">系统警报</button>
                 </div>
             </div>
         </div>
@@ -471,12 +471,25 @@
         let refreshInterval = null;
 
         // 切换标签页
-        function switchTab(tabName) {
+        function switchTab(tabName, targetElement = null) {
             // 更新导航
             document.querySelectorAll('.nav-tab').forEach(tab => {
                 tab.classList.remove('active');
             });
-            event.target.classList.add('active');
+            
+            // 如果有目标元素（点击事件），则激活它
+            if (targetElement) {
+                targetElement.classList.add('active');
+            } else {
+                // 否则根据 tabName 找到对应的标签页并激活
+                const tabs = document.querySelectorAll('.nav-tab');
+                const tabTexts = ['仪表板', '实例管理', '性能分析', '系统警报'];
+                const tabNames = ['dashboard', 'instances', 'performance', 'alerts'];
+                const index = tabNames.indexOf(tabName);
+                if (index !== -1 && tabs[index]) {
+                    tabs[index].classList.add('active');
+                }
+            }
 
             // 更新内容
             document.querySelectorAll('.tab-content').forEach(content => {
@@ -751,6 +764,7 @@
 
         // 刷新当前标签页数据
         function refreshCurrentTab() {
+            // 直接调用 switchTab，不传递 targetElement
             switchTab(currentTab);
         }
 
