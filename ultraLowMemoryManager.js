@@ -569,21 +569,39 @@ class UltraLowMemoryManager {
     let allowed = false;
     let reason = '';
     
-    if (totalInstances >= this.maxTotalInstances) {
-      reason = `已达到最大总实例数: ${this.maxTotalInstances}`;
-    } else if (this.browserInstances.size >= this.maxActiveInstances) {
-      // 尝试使用休眠实例
-      if (this.hibernatedInstances.size > 0) {
-        allowed = true;
-        reason = '可通过唤醒休眠实例创建';
+    // 开发模式：跳过内存检查
+    if (config.development && config.development.skipMemoryCheck) {
+      if (totalInstances >= this.maxTotalInstances) {
+        reason = `已达到最大总实例数: ${this.maxTotalInstances}`;
+      } else if (this.browserInstances.size >= this.maxActiveInstances) {
+        if (this.hibernatedInstances.size > 0) {
+          allowed = true;
+          reason = '可通过唤醒休眠实例创建';
+        } else {
+          reason = `已达到最大活跃实例数: ${this.maxActiveInstances}`;
+        }
       } else {
-        reason = `已达到最大活跃实例数: ${this.maxActiveInstances}`;
+        allowed = true;
+        reason = '开发模式：可以创建新实例';
       }
-    } else if (memInfo.usagePercent > 85) {
-      reason = `系统内存使用率过高: ${memInfo.usagePercent}%`;
     } else {
-      allowed = true;
-      reason = '可以创建新实例';
+      // 生产模式：严格内存检查
+      if (totalInstances >= this.maxTotalInstances) {
+        reason = `已达到最大总实例数: ${this.maxTotalInstances}`;
+      } else if (this.browserInstances.size >= this.maxActiveInstances) {
+        // 尝试使用休眠实例
+        if (this.hibernatedInstances.size > 0) {
+          allowed = true;
+          reason = '可通过唤醒休眠实例创建';
+        } else {
+          reason = `已达到最大活跃实例数: ${this.maxActiveInstances}`;
+        }
+      } else if (memInfo.usagePercent > 99) {
+        reason = `系统内存使用率过高: ${memInfo.usagePercent}%`;
+      } else {
+        allowed = true;
+        reason = '可以创建新实例';
+      }
     }
     
     return {

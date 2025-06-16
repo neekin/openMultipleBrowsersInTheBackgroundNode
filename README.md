@@ -665,4 +665,7 @@ node --expose-gc index.js
 
 # 或使用 PM2
 pm2 start ecosystem.config.js --node-args="--expose-gc"
+
+## debian 安装chromium
+apt-get install chromium chromium-l10n
 ```

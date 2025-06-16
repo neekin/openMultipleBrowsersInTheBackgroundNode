@@ -496,11 +496,25 @@ class DouyinOptimizedBrowserManager {
   canCreateNewInstance() {
     const memInfo = this.getSystemMemoryInfo();
     
+    // 开发模式：跳过内存检查
+    if (config.development && config.development.skipMemoryCheck) {
+      return {
+        allowed: this.browserInstances.size < this.maxInstances,
+        reason: this.browserInstances.size >= this.maxInstances 
+          ? `已达到抖音实例最大数: ${this.maxInstances}`
+          : '开发模式：可以创建抖音实例',
+        currentInstances: this.browserInstances.size,
+        maxInstances: this.maxInstances,
+        memoryUsage: memInfo.usagePercent
+      };
+    }
+    
+    // 生产模式：严格检查
     return {
-      allowed: this.browserInstances.size < this.maxInstances && memInfo.usagePercent < 80,
+      allowed: this.browserInstances.size < this.maxInstances && memInfo.usagePercent < 99,
       reason: this.browserInstances.size >= this.maxInstances 
         ? `已达到抖音实例最大数: ${this.maxInstances}`
-        : memInfo.usagePercent >= 80 
+        : memInfo.usagePercent >= 99 
         ? `系统内存使用率过高: ${memInfo.usagePercent}%`
         : '可以创建抖音实例',
       currentInstances: this.browserInstances.size,

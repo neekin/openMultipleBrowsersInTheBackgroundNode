@@ -2,6 +2,11 @@
 const path = require('path');
 
 const config = {
+  // 开发模式 - 跳过严格的内存检查
+  development: {
+    skipMemoryCheck: process.env.NODE_ENV !== 'production'
+  },
+  
   // 服务器配置
   server: {
     port: process.env.PORT || 3000,
