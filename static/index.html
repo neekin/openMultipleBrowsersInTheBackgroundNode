@@ -11,6 +11,8 @@
     #instanceList { font-size: 14px; }
     #instanceList .item { margin-bottom: 8px; border-bottom: 1px dashed #ddd; padding-bottom: 4px; }
     #instanceList .active { color: #1976d2; font-weight: bold; }
+    .tab-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; }
+    .tab-btn:hover { background: #f0f0f0; }
   </style>
 </head>
 <body>
@@ -30,6 +32,7 @@
       <input id="wsInput" type="text" placeholder="输入 wsEndpoint 远程连接" style="width:70%" />
       <button id="connectRemoteBtn">远程连接</button>
     </div>
+    <div id="tabBar" style="margin:10px 0;"></div>
   </div>
   <div id="sidebar">
     <h3>实例列表</h3>
@@ -38,13 +41,84 @@
   <script>
     let instanceId = '';
     let ws = null;
+    let currentTabs = [];
+    let currentTabIdx = 0;
 
     async function loadInstanceList() {
       const res = await fetch('/browsers');
       if (!res.ok) return document.getElementById('instanceList').innerText = '加载失败';
       const list = await res.json();
-      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'><div>ID: ${i.id}</div><div>UA: ${i.userAgent}</div><div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div><button onclick='selectInstance("${i.id}")'>切换</button> <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button></div>`).join('');
+      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'>
+        <div>ID: ${i.id}</div>
+        <div>UA: ${i.userAgent}</div>
+        <div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div>
+        <button onclick='selectInstance("${i.id}")'>切换</button>
+        <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button>
+        <button onclick='deleteInstance("${i.id}")' style='color:#c00;margin-left:4px;'>删除</button>
+      </div>`).join('');
       document.getElementById('instanceList').innerHTML = html || '暂无实例';
+      // 自动展示第一个实例
+      if (!instanceId && list.length > 0) {
+        instanceId = list[0].id;
+        document.getElementById('instanceId').innerText = instanceId;
+        startWebSocket();
+        setTimeout(loadTabs, 300);
+      }
+    }
+
+    async function loadTabs() {
+      if (!instanceId) return;
+      // 通过 ws 主动拉取标签页，优先用 ws，失败再用 http
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({type: 'getTabs'}));
+        // ws 返回后会自动渲染标签栏
+        return;
+      }
+      // fallback http
+      const res = await fetch(`/browsers/${instanceId}/pages`);
+      if (!res.ok) {
+        document.getElementById('tabBar').innerText = '标签加载失败';
+        return;
+      }
+      const tabs = await res.json();
+      renderTabs(tabs);
+    }
+
+    function renderTabs(tabs) {
+      currentTabs = tabs;
+      let html = tabs.map((t, i) => `<span style='display:inline-block;margin-right:4px;'>
+        <button data-idx='${i}' class='tab-btn' style='${i===currentTabIdx?"background:#1976d2;color:#fff;":""}'>${t.title||'新标签页'}<br><small>${t.url||''}</small></button>
+        <button data-idx='${i}' class='refresh-btn' title='刷新' style='margin-left:2px;'>⟳</button>
+        <button data-idx='${i}' class='close-btn' title='关闭' style='margin-left:2px;color:#c00;'>×</button>
+      </span>`).join('');
+      document.getElementById('tabBar').innerHTML = html || '无标签';
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.onclick = function() {
+          const idx = Number(btn.getAttribute('data-idx'));
+          switchTab(idx);
+        };
+      });
+      document.querySelectorAll('.refresh-btn').forEach(btn => {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          const idx = Number(btn.getAttribute('data-idx'));
+          refreshTab(idx);
+        };
+      });
+      document.querySelectorAll('.close-btn').forEach(btn => {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          const idx = Number(btn.getAttribute('data-idx'));
+          closeTab(idx);
+        };
+      });
+    }
+
+    function switchTab(idx) {
+      if (!ws || ws.readyState !== 1) return;
+      currentTabIdx = idx;
+      ws.send(JSON.stringify({type: 'switchTab', idx}));
+      loadTabs();
     }
 
     window.selectInstance = function(id) {
@@ -52,6 +126,7 @@
       document.getElementById('instanceId').innerText = id;
       startWebSocket();
       loadInstanceList();
+      setTimeout(loadTabs, 300);
     };
 
     document.getElementById('createBtn').onclick = async function() {
@@ -100,6 +175,22 @@
       });
     };
 
+    window.deleteInstance = async function(id) {
+      if (!confirm('确定要删除该实例吗？')) return;
+      const res = await fetch(`/browsers/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (instanceId === id) {
+          instanceId = '';
+          document.getElementById('instanceId').innerText = '';
+          if (ws) ws.close();
+        }
+        loadInstanceList();
+        setTimeout(loadTabs, 300);
+      } else {
+        document.getElementById('msg').innerText = '删除失败';
+      }
+    };
+
     function startWebSocket() {
       if (!instanceId) return;
       if (ws) ws.close();
@@ -119,16 +210,22 @@
               document.getElementById('msg').innerText = '截图错误: ' + data.error;
             }
             if (data.cursor) {
-              // 后端同步指针
               remoteCursor.style.left = (data.cursor.x-10) + 'px';
               remoteCursor.style.top = (data.cursor.y-10) + 'px';
               remoteCursor.style.display = 'block';
+            }
+            if (data.type === 'tabUpdate') {
+              loadTabs();
+            }
+            if (data.type === 'tabs' && Array.isArray(data.tabs)) {
+              renderTabs(data.tabs);
             }
           } catch {}
         }
       };
       ws.onclose = () => document.getElementById('msg').innerText = 'WebSocket已关闭';
       ws.onerror = () => document.getElementById('msg').innerText = 'WebSocket错误';
+      setTimeout(loadTabs, 300);
     }
 
     document.getElementById('screen').onclick = function(e) {
@@ -175,6 +272,24 @@
 
     loadInstanceList();
     setInterval(loadInstanceList, 5000);
+    // 定时主动拉取标签页（防止漏消息）
+    setInterval(() => {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({type: 'getTabs'}));
+      }
+    }, 3000);
+
+    function refreshTab(idx) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({type: 'refreshTab', idx}));
+    }
+    function closeTab(idx) {
+      if (!ws || ws.readyState !== 1) return;
+      ws.send(JSON.stringify({type: 'closeTab', idx}));
+    }
+    // 保证全局可用
+    window.refreshTab = refreshTab;
+    window.closeTab = closeTab;
   </script>
 </body>
 </html>
