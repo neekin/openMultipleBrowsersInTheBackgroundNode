@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>浏览器实例性能监控</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        .stat-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #2563eb;
+        }
+        .stat-label {
+            color: #6b7280;
+            margin-top: 5px;
+        }
+        .suggestions {
+            margin-top: 20px;
+        }
+        .suggestion {
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #fbbf24;
+            background: #fef3c7;
+            border-radius: 4px;
+        }
+        .suggestion.high {
+            border-left-color: #ef4444;
+            background: #fee2e2;
+        }
+        .suggestion.medium {
+            border-left-color: #f59e0b;
+            background: #fef3c7;
+        }
+        .suggestion.low {
+            border-left-color: #10b981;
+            background: #d1fae5;
+        }
+        .refresh-btn {
+            background: #2563eb;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .refresh-btn:hover {
+            background: #1d4ed8;
+        }
+        .instance-list {
+            display: grid;
+            gap: 15px;
+        }
+        .instance-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e5e7eb;
+        }
+        .instance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .instance-id {
+            font-family: monospace;
+            font-weight: bold;
+        }
+        .online-status {
+            padding: 4px 8px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .online {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        .offline {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>浏览器实例性能监控</h1>
+        
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h2>全局性能统计</h2>
+                <button class="refresh-btn" onclick="refreshStats()">刷新数据</button>
+            </div>
+            <div class="stats-grid" id="globalStats">
+                <!-- 全局统计数据将在这里显示 -->
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>浏览器实例列表</h2>
+            <div class="instance-list" id="instanceList">
+                <!-- 实例列表将在这里显示 -->
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>性能优化建议</h2>
+            <div class="suggestions" id="suggestions">
+                <!-- 优化建议将在这里显示 -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchGlobalStats() {
+            try {
+                const response = await fetch('/api/browsers/performance/global');
+                const data = await response.json();
+                
+                const statsHtml = `
+                    <div class="stat-item">
+                        <div class="stat-value">${data.activeInstances}</div>
+                        <div class="stat-label">活跃实例</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">${data.totalScreenshots}</div>
+                        <div class="stat-label">总截图数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">${data.totalOperations}</div>
+                        <div class="stat-label">总操作数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">${Math.round(data.averageResponseTime)}ms</div>
+                        <div class="stat-label">平均响应时间</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">${Math.round(data.screenshotsPerSecond * 10) / 10}</div>
+                        <div class="stat-label">截图/秒</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value">${Math.round((data.uptime / 1000 / 60))}min</div>
+                        <div class="stat-label">运行时间</div>
+                    </div>
+                `;
+                
+                document.getElementById('globalStats').innerHTML = statsHtml;
+            } catch (error) {
+                console.error('获取全局统计失败:', error);
+            }
+        }
+
+        async function fetchInstanceList() {
+            try {
+                const response = await fetch('/api/browsers');
+                const data = await response.json();
+                
+                let instancesHtml = '';
+                for (const instance of data) {
+                    const statusClass = instance.online ? 'online' : 'offline';
+                    const statusText = instance.online ? '在线' : '离线';
+                    
+                    instancesHtml += `
+                        <div class="instance-item">
+                            <div class="instance-header">
+                                <span class="instance-id">${instance.id}</span>
+                                <span class="online-status ${statusClass}">${statusText}</span>
+                            </div>
+                            <div>创建时间: ${new Date(instance.createdAt).toLocaleString()}</div>
+                            <div>用户代理: ${instance.userAgent}</div>
+                            ${instance.online ? `<button onclick="getInstanceSuggestions('${instance.id}')">获取优化建议</button>` : ''}
+                        </div>
+                    `;
+                }
+                
+                document.getElementById('instanceList').innerHTML = instancesHtml || '<p>暂无实例</p>';
+            } catch (error) {
+                console.error('获取实例列表失败:', error);
+            }
+        }
+
+        async function getInstanceSuggestions(instanceId) {
+            try {
+                const response = await fetch(`/api/browsers/${instanceId}/performance/suggestions`);
+                const data = await response.json();
+                
+                let suggestionsHtml = `<h3>实例 ${instanceId} 的优化建议:</h3>`;
+                
+                if (data.suggestions.length === 0) {
+                    suggestionsHtml += '<p>暂无优化建议，性能良好！</p>';
+                } else {
+                    for (const suggestion of data.suggestions) {
+                        suggestionsHtml += `
+                            <div class="suggestion ${suggestion.priority}">
+                                <strong>${suggestion.type}:</strong> ${suggestion.message}
+                                <br><small>建议: ${suggestion.suggestion}</small>
+                            </div>
+                        `;
+                    }
+                }
+                
+                document.getElementById('suggestions').innerHTML = suggestionsHtml;
+            } catch (error) {
+                console.error('获取优化建议失败:', error);
+            }
+        }
+
+        async function refreshStats() {
+            await Promise.all([
+                fetchGlobalStats(),
+                fetchInstanceList()
+            ]);
+        }
+
+        // 初始化加载
+        refreshStats();
+
+        // 每30秒自动刷新
+        setInterval(refreshStats, 30000);
+    </script>
+</body>
+</html>

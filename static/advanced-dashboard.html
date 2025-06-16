@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>高性能浏览器实例管理</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            line-height: 1.6;
+        }
+        
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 20px 0;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            font-size: 24px;
+            font-weight: bold;
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .nav-tabs {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .nav-tab {
+            padding: 10px 20px;
+            background: none;
+            border: 2px solid transparent;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .nav-tab.active {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+            border-color: transparent;
+        }
+        
+        .nav-tab:not(.active):hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.1);
+        }
+        
+        .main-content {
+            padding: 30px 0;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 25px;
+            margin-bottom: 30px;
+        }
+        
+        .card {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        
+        .card-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .card-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        
+        .system-card .card-icon {
+            background: linear-gradient(45deg, #4facfe, #00f2fe);
+        }
+        
+        .performance-card .card-icon {
+            background: linear-gradient(45deg, #43e97b, #38f9d7);
+        }
+        
+        .instances-card .card-icon {
+            background: linear-gradient(45deg, #fa709a, #fee140);
+        }
+        
+        .alerts-card .card-icon {
+            background: linear-gradient(45deg, #ff6b6b, #feca57);
+        }
+        
+        .metric-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: #718096;
+            font-size: 14px;
+        }
+        
+        .metric-value {
+            font-weight: 600;
+            font-size: 16px;
+            color: #2d3748;
+        }
+        
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        .progress-normal { background: linear-gradient(90deg, #4facfe, #00f2fe); }
+        .progress-warning { background: linear-gradient(90deg, #feca57, #ff9ff3); }
+        .progress-danger { background: linear-gradient(90deg, #ff6b6b, #ee5a24); }
+        
+        .instance-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+        }
+        
+        .instance-card {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 12px;
+            padding: 20px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .instance-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        
+        .instance-id {
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 12px;
+            background: #f7fafc;
+            padding: 4px 8px;
+            border-radius: 6px;
+            color: #4a5568;
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .status-online {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+        
+        .status-offline {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(45deg, #667eea, #764ba2);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn-secondary {
+            background: #e2e8f0;
+            color: #4a5568;
+        }
+        
+        .btn-secondary:hover {
+            background: #cbd5e0;
+        }
+        
+        .btn-danger {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a24);
+            color: white;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid;
+        }
+        
+        .alert-critical {
+            background: #fed7d7;
+            border-color: #e53e3e;
+            color: #742a2a;
+        }
+        
+        .alert-warning {
+            background: #fefcbf;
+            border-color: #d69e2e;
+            color: #744210;
+        }
+        
+        .alert-info {
+            background: #bee3f8;
+            border-color: #3182ce;
+            color: #2a4365;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+        }
+        
+        .spinner {
+            border: 3px solid #e2e8f0;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #718096;
+        }
+        
+        .empty-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">🚀 高性能浏览器管理</div>
+                <div class="nav-tabs">
+                    <button class="nav-tab active" onclick="switchTab('dashboard')">仪表板</button>
+                    <button class="nav-tab" onclick="switchTab('instances')">实例管理</button>
+                    <button class="nav-tab" onclick="switchTab('performance')">性能分析</button>
+                    <button class="nav-tab" onclick="switchTab('alerts')">系统警报</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container main-content">
+        <!-- 仪表板 -->
+        <div id="dashboard" class="tab-content active">
+            <div class="dashboard-grid">
+                <div class="card system-card">
+                    <div class="card-header">
+                        <div class="card-title">系统状态</div>
+                        <div class="card-icon">💻</div>
+                    </div>
+                    <div id="systemMetrics">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <div>加载中...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card performance-card">
+                    <div class="card-header">
+                        <div class="card-title">性能指标</div>
+                        <div class="card-icon">📊</div>
+                    </div>
+                    <div id="performanceMetrics">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <div>加载中...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card instances-card">
+                    <div class="card-header">
+                        <div class="card-title">实例统计</div>
+                        <div class="card-icon">🏭</div>
+                    </div>
+                    <div id="instanceMetrics">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <div>加载中...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card alerts-card">
+                    <div class="card-header">
+                        <div class="card-title">系统警报</div>
+                        <div class="card-icon">⚠️</div>
+                    </div>
+                    <div id="alertsMetrics">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <div>加载中...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">系统建议</div>
+                    <button class="btn btn-secondary" onclick="refreshRecommendations()">刷新建议</button>
+                </div>
+                <div id="recommendations">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <div>分析中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 实例管理 -->
+        <div id="instances" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">浏览器实例</div>
+                    <button class="btn btn-primary" onclick="refreshInstances()">刷新列表</button>
+                </div>
+                <div id="instancesList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <div>加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 性能分析 -->
+        <div id="performance" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">性能详细分析</div>
+                    <button class="btn btn-primary" onclick="refreshPerformance()">刷新数据</button>
+                </div>
+                <div id="performanceDetails">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <div>加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 系统警报 -->
+        <div id="alerts" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">系统警报历史</div>
+                    <button class="btn btn-secondary" onclick="clearAlerts()">清除警报</button>
+                </div>
+                <div id="alertsList">
+                    <div class="loading">
+                        <div class="spinner"></div>
+                        <div>加载中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'dashboard';
+        let refreshInterval = null;
+
+        // 切换标签页
+        function switchTab(tabName) {
+            // 更新导航
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // 更新内容
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabName).classList.add('active');
+
+            currentTab = tabName;
+            
+            // 加载对应数据
+            switch(tabName) {
+                case 'dashboard':
+                    loadDashboard();
+                    break;
+                case 'instances':
+                    loadInstances();
+                    break;
+                case 'performance':
+                    loadPerformanceDetails();
+                    break;
+                case 'alerts':
+                    loadAlerts();
+                    break;
+            }
+        }
+
+        // 加载仪表板数据
+        async function loadDashboard() {
+            try {
+                const [systemRes, performanceRes, operationsRes] = await Promise.all([
+                    fetch('/api/browsers/system/resources'),
+                    fetch('/api/browsers/performance/global'),
+                    fetch('/api/browsers/system/operations')
+                ]);
+
+                const systemData = await systemRes.json();
+                const performanceData = await performanceRes.json();
+                const operationsData = await operationsRes.json();
+
+                updateSystemMetrics(systemData);
+                updatePerformanceMetrics(performanceData);
+                updateInstanceMetrics(systemData.instances);
+                updateAlertsMetrics(systemData.alerts);
+
+            } catch (error) {
+                console.error('加载仪表板数据失败:', error);
+            }
+        }
+
+        // 更新系统指标
+        function updateSystemMetrics(data) {
+            const html = `
+                <div class="metric-row">
+                    <span class="metric-label">内存使用率</span>
+                    <span class="metric-value">${data.system.memoryUsage}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill ${getProgressClass(parseFloat(data.system.memoryUsage))}" 
+                         style="width: ${data.system.memoryUsage}%"></div>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">CPU使用率</span>
+                    <span class="metric-value">${data.system.cpuUsage}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill ${getProgressClass(parseFloat(data.system.cpuUsage))}" 
+                         style="width: ${data.system.cpuUsage}%"></div>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">可用内存</span>
+                    <span class="metric-value">${data.system.freeMemoryGB} GB</span>
+                </div>
+            `;
+            document.getElementById('systemMetrics').innerHTML = html;
+        }
+
+        // 获取进度条样式
+        function getProgressClass(value) {
+            if (value > 80) return 'progress-danger';
+            if (value > 60) return 'progress-warning';
+            return 'progress-normal';
+        }
+
+        // 更新性能指标
+        function updatePerformanceMetrics(data) {
+            const html = `
+                <div class="metric-row">
+                    <span class="metric-label">平均响应时间</span>
+                    <span class="metric-value">${Math.round(data.averageResponseTime)}ms</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">截图/秒</span>
+                    <span class="metric-value">${(data.screenshotsPerSecond || 0).toFixed(1)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">操作/秒</span>
+                    <span class="metric-value">${(data.operationsPerSecond || 0).toFixed(1)}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">总截图数</span>
+                    <span class="metric-value">${data.totalScreenshots}</span>
+                </div>
+            `;
+            document.getElementById('performanceMetrics').innerHTML = html;
+        }
+
+        // 更新实例指标
+        function updateInstanceMetrics(data) {
+            const html = `
+                <div class="metric-row">
+                    <span class="metric-label">活跃实例</span>
+                    <span class="metric-value">${data.count}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">最大允许</span>
+                    <span class="metric-value">${data.maxAllowed}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">总内存使用</span>
+                    <span class="metric-value">${Math.round(data.totalMemoryMB)} MB</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">总操作数</span>
+                    <span class="metric-value">${data.totalOperations}</span>
+                </div>
+            `;
+            document.getElementById('instanceMetrics').innerHTML = html;
+        }
+
+        // 更新警报指标
+        function updateAlertsMetrics(data) {
+            const html = `
+                <div class="metric-row">
+                    <span class="metric-label">总警报数</span>
+                    <span class="metric-value">${data.total}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">严重警报</span>
+                    <span class="metric-value">${data.critical}</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">最近警报</span>
+                    <span class="metric-value">${data.recent}</span>
+                </div>
+            `;
+            document.getElementById('alertsMetrics').innerHTML = html;
+        }
+
+        // 加载系统建议
+        async function loadRecommendations() {
+            try {
+                const response = await fetch('/api/browsers/system/recommendations');
+                const data = await response.json();
+                
+                if (data.recommendations.length === 0) {
+                    document.getElementById('recommendations').innerHTML = 
+                        '<div class="empty-state"><div class="empty-icon">✅</div><div>系统运行良好，暂无优化建议</div></div>';
+                    return;
+                }
+
+                let html = '';
+                data.recommendations.forEach(rec => {
+                    const alertClass = rec.level === 'high' ? 'alert-critical' : 
+                                     rec.level === 'medium' ? 'alert-warning' : 'alert-info';
+                    html += `<div class="alert ${alertClass}">${rec.message}</div>`;
+                });
+
+                document.getElementById('recommendations').innerHTML = html;
+            } catch (error) {
+                console.error('加载系统建议失败:', error);
+            }
+        }
+
+        // 刷新建议
+        function refreshRecommendations() {
+            document.getElementById('recommendations').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><div>分析中...</div></div>';
+            loadRecommendations();
+        }
+
+        // 加载实例列表
+        async function loadInstances() {
+            try {
+                const response = await fetch('/api/browsers');
+                const data = await response.json();
+                
+                if (data.length === 0) {
+                    document.getElementById('instancesList').innerHTML = 
+                        '<div class="empty-state"><div class="empty-icon">🏭</div><div>暂无浏览器实例</div></div>';
+                    return;
+                }
+
+                let html = '<div class="instance-grid">';
+                data.forEach(instance => {
+                    const statusClass = instance.online ? 'status-online' : 'status-offline';
+                    const statusText = instance.online ? '在线' : '离线';
+                    
+                    html += `
+                        <div class="instance-card">
+                            <div class="instance-header">
+                                <div class="instance-id">${instance.id}</div>
+                                <div class="status-badge ${statusClass}">${statusText}</div>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">创建时间</span>
+                                <span class="metric-value">${new Date(instance.createdAt).toLocaleString()}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">用户代理</span>
+                                <span class="metric-value" style="font-size: 12px; word-break: break-all;">${instance.userAgent}</span>
+                            </div>
+                            <div style="margin-top: 15px; display: flex; gap: 10px;">
+                                ${instance.online ? `
+                                    <button class="btn btn-primary" onclick="optimizeInstance('${instance.id}')">优化</button>
+                                    <button class="btn btn-secondary" onclick="preloadInstance('${instance.id}')">预加载</button>
+                                ` : ''}
+                                <button class="btn btn-secondary" onclick="viewInstanceDetails('${instance.id}')">详情</button>
+                            </div>
+                        </div>
+                    `;
+                });
+                html += '</div>';
+
+                document.getElementById('instancesList').innerHTML = html;
+            } catch (error) {
+                console.error('加载实例列表失败:', error);
+            }
+        }
+
+        // 优化实例
+        async function optimizeInstance(instanceId) {
+            try {
+                const response = await fetch(`/api/browsers/${instanceId}/optimize`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('实例优化完成！');
+                    loadInstances();
+                } else {
+                    alert('优化失败: ' + data.error);
+                }
+            } catch (error) {
+                alert('优化失败: ' + error.message);
+            }
+        }
+
+        // 预加载实例资源
+        async function preloadInstance(instanceId) {
+            try {
+                const response = await fetch(`/api/browsers/${instanceId}/preload`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('资源预加载完成！');
+                } else {
+                    alert('预加载失败: ' + data.error);
+                }
+            } catch (error) {
+                alert('预加载失败: ' + error.message);
+            }
+        }
+
+        // 查看实例详情
+        async function viewInstanceDetails(instanceId) {
+            // 这里可以实现详情弹窗或跳转到详情页面
+            window.open(`/browsers/${instanceId}`, '_blank');
+        }
+
+        // 刷新当前标签页数据
+        function refreshCurrentTab() {
+            switchTab(currentTab);
+        }
+
+        // 启动自动刷新
+        function startAutoRefresh() {
+            if (refreshInterval) clearInterval(refreshInterval);
+            refreshInterval = setInterval(refreshCurrentTab, 10000); // 10秒刷新一次
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDashboard();
+            loadRecommendations();
+            startAutoRefresh();
+        });
+
+        // 清理
+        window.addEventListener('beforeunload', function() {
+            if (refreshInterval) clearInterval(refreshInterval);
+        });
+
+        // 其他功能函数的占位符
+        function refreshInstances() {
+            document.getElementById('instancesList').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+            loadInstances();
+        }
+
+        function loadPerformanceDetails() {
+            document.getElementById('performanceDetails').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+            // TODO: 实现详细性能分析
+        }
+
+        function loadAlerts() {
+            document.getElementById('alertsList').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+            // TODO: 实现警报历史
+        }
+
+        function refreshPerformance() {
+            loadPerformanceDetails();
+        }
+
+        function clearAlerts() {
+            // TODO: 实现清除警报功能
+        }
+    </script>
+</body>
+</html>

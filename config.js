@@ -19,7 +19,8 @@ const config = {
     defaultUrl: 'https://www.example.com',
     screenshotOptions: {
       type: 'jpeg',
-      quality: 60
+      quality: 30, // 降低质量以提高速度
+      optimizeForSpeed: true
     },
     launchOptions: {
       headless: true,
@@ -37,8 +38,15 @@ const config = {
   
   // WebSocket 配置
   websocket: {
-    screenshotInterval: 250, // 截图间隔（毫秒）
-    path: '/browsers/ws/operate'
+    screenshotInterval: 500, // 截图间隔（毫秒）- 降低频率
+    adaptiveInterval: true, // 自适应截图间隔
+    minInterval: 200, // 最小间隔
+    maxInterval: 2000, // 最大间隔
+    path: '/browsers/ws/operate',
+    batchOperations: true, // 批量操作
+    batchTimeout: 50, // 批量操作超时（毫秒）
+    enableCompression: true, // 启用压缩
+    deltaScreenshot: true // 增量截图
   },
   
   // 指纹配置

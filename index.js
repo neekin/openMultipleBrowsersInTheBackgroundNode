@@ -34,7 +34,7 @@ db.serialize(() => {
 
 // 挂载 /browsers 路由
 const browsersRouter = require('./routes/browsers')(browsers, db);
-app.use('/browsers', browsersRouter);
+app.use('/api/browsers', browsersRouter);
 
 // WebSocket 操作接口
 const server = http.createServer(app);
@@ -43,6 +43,17 @@ setupWebSocket(server, browsers);
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'static', 'index.html'));
 });
+
+app.get('/performance', (req, res) => {
+  res.sendFile(path.join(__dirname, 'static', 'performance.html'));
+});
+
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'static', 'advanced-dashboard.html'));
+});
+
+// 向后兼容的路由
+app.use('/browsers', browsersRouter);
 
 // 404 处理
 app.use((req, res) => {
