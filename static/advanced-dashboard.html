@@ -378,10 +378,10 @@
 
                 <div class="card instances-card">
                     <div class="card-header">
-                        <div class="card-title">实例统计</div>
-                        <div class="card-icon">🏭</div>
+                        <div class="card-title">内存优化统计</div>
+                        <div class="card-icon">🧠</div>
                     </div>
-                    <div id="instanceMetrics">
+                    <div id="memoryStats">
                         <div class="loading">
                             <div class="spinner"></div>
                             <div>加载中...</div>
@@ -405,14 +405,72 @@
 
             <div class="card">
                 <div class="card-header">
-                    <div class="card-title">系统建议</div>
-                    <button class="btn btn-secondary" onclick="refreshRecommendations()">刷新建议</button>
-                </div>
-                <div id="recommendations">
-                    <div class="loading">
-                        <div class="spinner"></div>
-                        <div>分析中...</div>
+                    <div class="card-title">抖音专用优化控制</div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-primary" onclick="createDouyinInstance()">创建抖音实例</button>
+                        <button class="btn btn-secondary" onclick="loadDouyinStats()">抖音统计</button>
+                        <button class="btn btn-warning" onclick="douyinMaintenance()">抖音维护</button>
                     </div>
+                </div>
+                <div id="douyinControls">
+                    <div class="metric-row">
+                        <span class="metric-label">抖音实例数:</span>
+                        <span id="douyinInstanceCount" class="metric-value">-</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">已登录实例:</span>
+                        <span id="douyinLoggedInCount" class="metric-value">-</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">未登录实例:</span>
+                        <span id="douyinLoggedOutCount" class="metric-value">-</span>
+                    </div>
+                    <div id="douyinResults"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">超低内存模式控制</div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-primary" onclick="emergencyMemoryRelease()">紧急内存释放</button>
+                        <button class="btn btn-secondary" onclick="loadUltraMemoryStats()">查看详细统计</button>
+                        <button class="btn btn-warning" onclick="hibernateIdleInstances()">休眠空闲实例</button>
+                    </div>
+                </div>
+                <div id="ultraMemoryControls">
+                    <div class="metric-row">
+                        <span class="metric-label">内存压力等级:</span>
+                        <span id="memoryPressureLevel" class="metric-value">-</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">活跃实例:</span>
+                        <span id="activeInstanceCount" class="metric-value">-</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">休眠实例:</span>
+                        <span id="hibernatedInstanceCount" class="metric-value">-</span>
+                    </div>
+                    <div id="ultraMemoryResults"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">内存优化控制</div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn btn-primary" onclick="optimizeMemory()">全局内存优化</button>
+                        <button class="btn btn-secondary" onclick="batchCreateInstances()">批量创建实例</button>
+                        <button class="btn btn-secondary" onclick="checkCanCreate()">检查创建条件</button>
+                    </div>
+                </div>
+                <div id="memoryControls">
+                    <div class="metric-row">
+                        <span class="metric-label">批量创建数量:</span>
+                        <input type="number" id="batchCount" value="5" min="1" max="10" 
+                               style="width: 80px; padding: 4px; border: 1px solid #ddd; border-radius: 4px;">
+                    </div>
+                    <div id="memoryControlResults"></div>
                 </div>
             </div>
         </div>
@@ -519,19 +577,21 @@
         // 加载仪表板数据
         async function loadDashboard() {
             try {
-                const [systemRes, performanceRes, operationsRes] = await Promise.all([
+                const [systemRes, performanceRes, operationsRes, memoryRes] = await Promise.all([
                     fetch('/api/browsers/system/resources'),
                     fetch('/api/browsers/performance/global'),
-                    fetch('/api/browsers/system/operations')
+                    fetch('/api/browsers/system/operations'),
+                    fetch('/api/browsers/memory/stats')
                 ]);
 
                 const systemData = await systemRes.json();
                 const performanceData = await performanceRes.json();
                 const operationsData = await operationsRes.json();
+                const memoryData = await memoryRes.json();
 
                 updateSystemMetrics(systemData);
                 updatePerformanceMetrics(performanceData);
-                updateInstanceMetrics(systemData.instances);
+                updateMemoryStats(memoryData);
                 updateAlertsMetrics(systemData.alerts);
 
             } catch (error) {
@@ -811,6 +871,357 @@
 
         function clearAlerts() {
             // TODO: 实现清除警报功能
+        }
+
+        // 加载内存统计
+        async function loadMemoryStats() {
+            try {
+                const response = await fetch('/api/browsers/memory/stats');
+                const data = await response.json();
+                updateMemoryStats(data);
+            } catch (error) {
+                console.error('加载内存统计失败:', error);
+                document.getElementById('memoryStats').innerHTML = 
+                    '<div class="error">内存统计加载失败</div>';
+            }
+        }
+
+        // 更新内存统计
+        function updateMemoryStats(data) {
+            // 检查是否是超低内存模式数据
+            const isUltraMode = data.memoryPressureLevel !== undefined;
+            
+            let html;
+            if (isUltraMode) {
+                // 超低内存模式显示
+                html = `
+                    <div class="metric-row">
+                        <span class="metric-label">活跃实例</span>
+                        <span class="metric-value">${data.activeInstances}/${data.maxActiveInstances}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">休眠实例</span>
+                        <span class="metric-value">${data.hibernatedInstances}</span>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">内存压力</span>
+                        <span class="metric-value ${data.memoryPressureLevel >= 2 ? 'warning' : ''}">${data.memoryPressureText}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill ${getProgressClass(data.systemMemory.usagePercent)}" 
+                             style="width: ${data.systemMemory.usagePercent}%"></div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">系统内存</span>
+                        <span class="metric-value">${data.systemMemory.used.toFixed(1)}GB / ${data.systemMemory.total.toFixed(1)}GB</span>
+                    </div>
+                `;
+            } else {
+                // 标准模式显示
+                html = `
+                    <div class="metric-row">
+                        <span class="metric-label">活跃实例</span>
+                        <span class="metric-value">${data.totalInstances}/${data.maxInstances}</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill ${getProgressClass((data.totalInstances / data.maxInstances) * 100)}" 
+                             style="width: ${(data.totalInstances / data.maxInstances) * 100}%"></div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">系统内存使用</span>
+                        <span class="metric-value">${data.systemMemory.usagePercent}%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill ${getProgressClass(data.systemMemory.usagePercent)}" 
+                             style="width: ${data.systemMemory.usagePercent}%"></div>
+                    </div>
+                    <div class="metric-row">
+                        <span class="metric-label">可用内存</span>
+                        <span class="metric-value">${data.systemMemory.free}GB</span>
+                    </div>
+                `;
+            }
+            
+            document.getElementById('memoryStats').innerHTML = html;
+
+            // 如果是超低内存模式，同时更新控制面板
+            if (isUltraMode) {
+                updateUltraMemoryStats(data);
+            }
+        }
+
+        // 全局内存优化
+        async function optimizeMemory() {
+            try {
+                document.getElementById('memoryControlResults').innerHTML = 
+                    '<div class="loading"><div class="spinner"></div><div>优化中...</div></div>';
+                
+                const response = await fetch('/api/browsers/memory/optimize', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('memoryControlResults').innerHTML = 
+                        '<div class="alert alert-info">内存优化完成！</div>';
+                    // 刷新内存统计
+                    loadMemoryStats();
+                } else {
+                    document.getElementById('memoryControlResults').innerHTML = 
+                        `<div class="alert alert-critical">优化失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('memoryControlResults').innerHTML = 
+                    `<div class="alert alert-critical">优化失败: ${error.message}</div>`;
+            }
+        }
+
+        // 批量创建实例
+        async function batchCreateInstances() {
+            try {
+                const count = document.getElementById('batchCount').value;
+                document.getElementById('memoryControlResults').innerHTML = 
+                    '<div class="loading"><div class="spinner"></div><div>创建中...</div></div>';
+                
+                const response = await fetch('/api/browsers/batch-create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ count: parseInt(count) })
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    let html = `<div class="alert alert-info">成功创建 ${data.created} 个实例！</div>`;
+                    if (data.errors && data.errors.length > 0) {
+                        html += '<div class="alert alert-warning">部分创建失败:<br>' + 
+                               data.errors.join('<br>') + '</div>';
+                    }
+                    document.getElementById('memoryControlResults').innerHTML = html;
+                    
+                    // 刷新统计和实例列表
+                    loadMemoryStats();
+                    loadInstances();
+                } else {
+                    document.getElementById('memoryControlResults').innerHTML = 
+                        `<div class="alert alert-critical">创建失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('memoryControlResults').innerHTML = 
+                    `<div class="alert alert-critical">创建失败: ${error.message}</div>`;
+            }
+        }
+
+        // 检查是否可以创建新实例
+        async function checkCanCreate() {
+            try {
+                const response = await fetch('/api/browsers/memory/can-create');
+                const data = await response.json();
+                
+                const alertClass = data.allowed ? 'alert-info' : 'alert-warning';
+                const html = `
+                    <div class="alert ${alertClass}">
+                        <strong>创建条件检查:</strong><br>
+                        ${data.reason}<br>
+                        当前实例: ${data.currentInstances}/${data.maxInstances}<br>
+                        内存使用率: ${data.memoryUsage}%
+                    </div>
+                `;
+                document.getElementById('memoryControlResults').innerHTML = html;
+            } catch (error) {
+                document.getElementById('memoryControlResults').innerHTML = 
+                    `<div class="alert alert-critical">检查失败: ${error.message}</div>`;
+            }
+        }
+
+        // 抖音专用函数
+        async function createDouyinInstance() {
+            try {
+                const response = await fetch('/api/browsers/douyin/create', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.id) {
+                    const alertClass = data.loginStatus?.isLoggedIn ? 'alert-success' : 'alert-warning';
+                    const loginText = data.loginStatus?.isLoggedIn ? '已登录' : '未登录';
+                    document.getElementById('douyinResults').innerHTML = 
+                        `<div class="alert ${alertClass}">抖音实例创建成功！<br>实例ID: ${data.id}<br>登录状态: ${loginText}</div>`;
+                    loadInstances();
+                    loadDouyinStats();
+                } else {
+                    document.getElementById('douyinResults').innerHTML = 
+                        `<div class="alert alert-critical">创建失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('douyinResults').innerHTML = 
+                    `<div class="alert alert-critical">创建失败: ${error.message}</div>`;
+            }
+        }
+
+        async function loadDouyinStats() {
+            try {
+                const response = await fetch('/api/browsers/douyin/stats');
+                const data = await response.json();
+                updateDouyinStats(data);
+            } catch (error) {
+                console.error('加载抖音统计失败:', error);
+                document.getElementById('douyinResults').innerHTML = 
+                    '<div class="alert alert-critical">抖音统计加载失败</div>';
+            }
+        }
+
+        function updateDouyinStats(data) {
+            document.getElementById('douyinInstanceCount').textContent = data.douyinInstances.length;
+            document.getElementById('douyinLoggedInCount').textContent = data.loginStatusSummary.loggedIn;
+            document.getElementById('douyinLoggedOutCount').textContent = data.loginStatusSummary.loggedOut;
+
+            if (data.douyinInstances.length > 0) {
+                let html = '<div class="alert alert-info"><strong>抖音实例详情:</strong><br>';
+                data.douyinInstances.forEach(instance => {
+                    const status = instance.loginStatus === 'logged_in' ? '✅ 已登录' : 
+                                  instance.loginStatus === 'logged_out' ? '❌ 未登录' : '❓ 未知';
+                    html += `实例 ${instance.id.substring(0, 8)}: ${status} (${instance.douyinPages}个抖音页面)<br>`;
+                });
+                html += '</div>';
+                document.getElementById('douyinResults').innerHTML = html;
+            }
+        }
+
+        async function douyinMaintenance() {
+            try {
+                const response = await fetch('/api/browsers/douyin/maintenance', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('douyinResults').innerHTML = 
+                        `<div class="alert alert-success">${data.message}</div>`;
+                    loadDouyinStats();
+                } else {
+                    document.getElementById('douyinResults').innerHTML = 
+                        `<div class="alert alert-critical">维护失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('douyinResults').innerHTML = 
+                    `<div class="alert alert-critical">抖音维护失败: ${error.message}</div>`;
+            }
+        }
+
+        // 超低内存模式函数
+        async function loadUltraMemoryStats() {
+            try {
+                const response = await fetch('/api/browsers/memory/ultra-stats');
+                const data = await response.json();
+                updateUltraMemoryStats(data);
+            } catch (error) {
+                console.error('加载超低内存统计失败:', error);
+                document.getElementById('ultraMemoryResults').innerHTML = 
+                    '<div class="alert alert-critical">超低内存统计加载失败</div>';
+            }
+        }
+
+        // 更新超低内存统计
+        function updateUltraMemoryStats(data) {
+            // 更新基本指标
+            document.getElementById('memoryPressureLevel').textContent = data.memoryPressureText || '未知';
+            document.getElementById('activeInstanceCount').textContent = 
+                `${data.activeInstances}/${data.maxActiveInstances}`;
+            document.getElementById('hibernatedInstanceCount').textContent = data.hibernatedInstances;
+
+            // 显示详细信息
+            const html = `
+                <div class="alert alert-info">
+                    <strong>超低内存模式统计:</strong><br>
+                    总实例数: ${data.totalInstances}/${data.maxTotalInstances}<br>
+                    内存压力: ${data.memoryPressureText} (${data.systemMemory.usagePercent}%)<br>
+                    系统内存: ${data.systemMemory.used.toFixed(1)}GB / ${data.systemMemory.total.toFixed(1)}GB<br>
+                    休眠实例: ${data.hibernatedList.length}
+                </div>
+            `;
+            document.getElementById('ultraMemoryResults').innerHTML = html;
+        }
+
+        // 紧急内存释放
+        async function emergencyMemoryRelease() {
+            try {
+                const response = await fetch('/api/browsers/memory/emergency-release', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('ultraMemoryResults').innerHTML = 
+                        `<div class="alert alert-success">${data.message}</div>`;
+                    loadUltraMemoryStats(); // 重新加载统计
+                } else {
+                    document.getElementById('ultraMemoryResults').innerHTML = 
+                        `<div class="alert alert-critical">操作失败: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('ultraMemoryResults').innerHTML = 
+                    `<div class="alert alert-critical">紧急内存释放失败: ${error.message}</div>`;
+            }
+        }
+
+        // 休眠空闲实例
+        async function hibernateIdleInstances() {
+            try {
+                // 先获取统计信息，找到空闲实例
+                const statsResponse = await fetch('/api/browsers/memory/ultra-stats');
+                const statsData = await statsResponse.json();
+                
+                let hibernatedCount = 0;
+                const currentTime = Date.now();
+                
+                // 休眠超过5分钟未使用的实例
+                for (const instance of statsData.instances) {
+                    if (instance.idleTime > 5 * 60 * 1000) { // 5分钟
+                        try {
+                            const hibernateResponse = await fetch(`/api/browsers/${instance.id}/hibernate`, {
+                                method: 'POST'
+                            });
+                            if (hibernateResponse.ok) {
+                                hibernatedCount++;
+                            }
+                        } catch (e) {
+                            console.warn(`休眠实例 ${instance.id} 失败:`, e.message);
+                        }
+                    }
+                }
+                
+                document.getElementById('ultraMemoryResults').innerHTML = 
+                    `<div class="alert alert-success">已休眠 ${hibernatedCount} 个空闲实例</div>`;
+                loadUltraMemoryStats(); // 重新加载统计
+                
+            } catch (error) {
+                document.getElementById('ultraMemoryResults').innerHTML = 
+                    `<div class="alert alert-critical">休眠操作失败: ${error.message}</div>`;
+            }
+        }
+
+        // 唤醒休眠实例
+        async function wakeupInstance(instanceId) {
+            try {
+                const response = await fetch(`/api/browsers/${instanceId}/wakeup`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    return true;
+                } else {
+                    console.error('唤醒实例失败:', data.error);
+                    return false;
+                }
+            } catch (error) {
+                console.error('唤醒实例失败:', error);
+                return false;
+            }
         }
     </script>
 </body>

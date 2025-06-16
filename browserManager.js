@@ -2,6 +2,14 @@ const puppeteer = require('puppeteer');
 const path = require('path');
 const fs = require('fs');
 const config = require('./config');
+const MemoryOptimizedBrowserManager = require('./memoryOptimizedBrowserManager');
+const UltraLowMemoryManager = require('./ultraLowMemoryManager');
+const DouyinOptimizedManager = require('./douyinOptimizedManager');
+
+// 初始化内存管理器 - 根据用途选择
+const ultraMemoryManager = new UltraLowMemoryManager();
+const fallbackManager = new MemoryOptimizedBrowserManager();
+const douyinManager = new DouyinOptimizedManager(); // 抖音专用管理器
 
 // 自动检测 chromium 路径
 function detectChromiumPath() {
@@ -29,45 +37,196 @@ function randomFingerprint() {
 }
 
 async function launchBrowser({ userDataDir, fingerprint, url }) {
-  const launchOptions = {
-    ...config.browser.launchOptions,
-    userDataDir,
-    args: [
-      ...config.browser.launchOptions.args,
-      `--window-size=${fingerprint.viewport.width},${fingerprint.viewport.height}`
-    ]
-  };
-  if (chromiumPath) launchOptions.executablePath = chromiumPath;
+  // 检测是否是抖音页面
+  const isDouyinPage = url && url.includes('douyin.com');
   
-  const browser = await puppeteer.launch(launchOptions);
-  const page = await browser.newPage();
-  await page.setUserAgent(fingerprint.userAgent);
-  await page.setViewport(fingerprint.viewport);
-  if (url) await page.goto(url);
-  return { browser, page };
+  if (isDouyinPage) {
+    // 使用抖音专用管理器
+    console.log('🎵 检测到抖音页面，使用抖音专用优化');
+    const canCreate = douyinManager.canCreateNewInstance();
+    if (!canCreate.allowed) {
+      throw new Error(canCreate.reason);
+    }
+
+    try {
+      const { browser, instanceId } = await douyinManager.createDouyinOptimizedBrowser({
+        userDataDir,
+        instanceId: require('crypto').randomUUID()
+      });
+
+      const page = await douyinManager.createDouyinOptimizedPage(browser);
+
+      // 导航到抖音并处理登录
+      const navResult = await douyinManager.navigateToDouyinWithLogin(page, { url });
+      
+      // 启动登录保活
+      await douyinManager.keepLoginActive(page);
+
+      return { 
+        browser, 
+        page, 
+        instanceId,
+        isDouyinOptimized: true,
+        loginStatus: navResult.loginStatus
+      };
+    } catch (error) {
+      console.error('抖音优化模式创建失败:', error.message);
+      throw error;
+    }
+  }
+
+  // 非抖音页面使用原有的超低内存优化
+  const canCreate = ultraMemoryManager.canCreateNewInstance();
+  if (!canCreate.allowed) {
+    const fallbackCanCreate = fallbackManager.canCreateNewInstance();
+    if (!fallbackCanCreate.allowed) {
+      throw new Error(canCreate.reason);
+    }
+  }
+
+  try {
+    // 优先使用超低内存管理器创建浏览器
+    const { browser, instanceId } = await ultraMemoryManager.createUltraLowMemoryBrowser({
+      userDataDir,
+      instanceId: require('crypto').randomUUID()
+    });
+
+    // 创建超优化的页面
+    const page = await ultraMemoryManager.createUltraOptimizedPage(browser, {
+      enableJS: false, // 默认禁用JS以极致节省内存
+      enableCSS: false, // 禁用CSS
+      width: Math.min(fingerprint.viewport.width, 400),
+      height: Math.min(fingerprint.viewport.height, 300)
+    });
+
+    // 设置用户代理和视口
+    await page.setUserAgent(fingerprint.userAgent);
+    await page.setViewport({
+      ...fingerprint.viewport,
+      width: Math.min(fingerprint.viewport.width, 400),
+      height: Math.min(fingerprint.viewport.height, 300)
+    });
+
+    // 导航到URL（如果提供）
+    if (url) {
+      try {
+        await page.goto(url, { 
+          waitUntil: 'domcontentloaded', // 只等待DOM加载
+          timeout: 5000 // 更短的超时时间
+        });
+      } catch (navError) {
+        console.warn('页面导航失败，但继续创建实例:', navError.message);
+      }
+    }
+
+    return { browser, page, instanceId };
+  } catch (error) {
+    console.error('超低内存模式创建失败，尝试标准模式:', error.message);
+    
+    // 回退到标准内存优化模式
+    try {
+      const { browser, instanceId } = await fallbackManager.createOptimizedBrowser({
+        userDataDir,
+        instanceId: require('crypto').randomUUID()
+      });
+
+      const page = await fallbackManager.createOptimizedPage(browser, {
+        enableImages: false,
+        width: fingerprint.viewport.width,
+        height: fingerprint.viewport.height
+      });
+
+      await page.setUserAgent(fingerprint.userAgent);
+      await page.setViewport(fingerprint.viewport);
+
+      if (url) {
+        try {
+          await page.goto(url, { 
+            waitUntil: 'domcontentloaded',
+            timeout: 10000 
+          });
+        } catch (navError) {
+          console.warn('页面导航失败:', navError.message);
+        }
+      }
+
+      return { browser, page, instanceId };
+    } catch (fallbackError) {
+      console.error('创建浏览器实例失败:', fallbackError);
+      throw fallbackError;
+    }
+  }
 }
 
 async function restoreBrowser(row) {
-  const launchOptions = {
-    ...config.browser.launchOptions,
-    userDataDir: row.userDataDir,
-    args: [
-      ...config.browser.launchOptions.args,
-      `--window-size=${JSON.parse(row.viewport).width},${JSON.parse(row.viewport).height}`
-    ]
-  };
-  if (chromiumPath) launchOptions.executablePath = chromiumPath;
-  
-  const browser = await puppeteer.launch(launchOptions);
-  const pages = await browser.pages();
-  for (const p of pages) {
-    await p.setUserAgent(row.userAgent);
-    await p.setViewport(JSON.parse(row.viewport));
-    if (row.url) {
-      try { await p.goto(row.url); } catch {}
+  // 检查是否可以创建新实例
+  const canCreate = ultraMemoryManager.canCreateNewInstance();
+  if (!canCreate.allowed) {
+    // 尝试唤醒休眠实例
+    try {
+      const result = await ultraMemoryManager.wakeupInstance(row.id);
+      if (result) {
+        ultraMemoryManager.updateInstanceUsage(row.id);
+        return result;
+      }
+    } catch (wakeupError) {
+      console.warn('唤醒休眠实例失败:', wakeupError.message);
     }
+    
+    throw new Error(canCreate.reason);
   }
-  return { browser, pages };
+
+  try {
+    const viewport = JSON.parse(row.viewport);
+    
+    // 使用超低内存管理器创建浏览器
+    const { browser, instanceId } = await ultraMemoryManager.createUltraLowMemoryBrowser({
+      userDataDir: row.userDataDir,
+      instanceId: row.id
+    });
+
+    // 获取所有页面
+    const pages = await browser.pages();
+    
+    // 如果没有页面，创建一个新页面
+    if (pages.length === 0) {
+      const page = await ultraMemoryManager.createUltraOptimizedPage(browser, {
+        enableImages: false,
+        width: viewport.width,
+        height: viewport.height
+      });
+      await page.setUserAgent(row.userAgent);
+      await page.setViewport(viewport);
+      if (row.url) {
+        try {
+          await page.goto(row.url, { 
+            waitUntil: 'domcontentloaded',
+            timeout: 10000 
+          });
+        } catch (e) {
+          console.warn('恢复页面导航失败:', e.message);
+        }
+      }
+      pages.push(page);
+    } else {
+      // 优化现有页面
+      for (const page of pages) {
+        await ultraMemoryManager.ultraOptimizePageMemory(page, {
+          width: viewport.width,
+          height: viewport.height,
+          enableJS: false,
+          enableCSS: false
+        });
+        await page.setUserAgent(row.userAgent);
+        await page.setViewport(viewport);
+      }
+    }
+
+    return { browser, pages, instanceId };
+  } catch (error) {
+    console.error('恢复浏览器实例失败:', error);
+    throw error;
+  }
 }
 
 async function restoreAllBrowsers(db, browsers) {
@@ -122,5 +281,8 @@ module.exports = {
   restoreBrowser,
   restoreAllBrowsers,
   detectChromiumPath,
-  chromiumPath
+  chromiumPath,
+  memoryManager: ultraMemoryManager, // 导出超低内存管理器
+  fallbackManager, // 导出备用管理器
+  douyinManager // 导出抖音专用管理器
 };

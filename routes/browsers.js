@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const config = require('../config');
-const { randomFingerprint, launchBrowser, restoreBrowser } = require('../browserManager');
+const { randomFingerprint, launchBrowser, restoreBrowser, douyinManager } = require('../browserManager');
 
 // 工具函数：安全删除目录
 function removeDirectory(dir) {
@@ -33,20 +33,46 @@ module.exports = function(browsers, db) {
   // 创建 Puppeteer 实例
   router.post('/create', async (req, res) => {
     try {
+      // 检查是否可以创建新实例
+      const { memoryManager } = require('../browserManager');
+      const canCreate = memoryManager.canCreateNewInstance();
+      if (!canCreate.allowed) {
+        return res.status(429).json({ 
+          error: canCreate.reason,
+          details: canCreate
+        });
+      }
+
       const id = crypto.randomUUID();
       const fingerprint = randomFingerprint();
       const userDataDir = path.join(config.browser.userDataDir, id);
       let url = req.body?.url || config.browser.defaultUrl;
       if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+      
       const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url });
       const pages = [page];
       setupBrowserEvents(browser, pages, id, browsers);
-      browsers[id] = { browser, pages, activePageIdx: 0, fingerprint, wsEndpoint: browser.wsEndpoint(), createdAt: new Date().toISOString(), userDataDir };
+      browsers[id] = { 
+        browser, 
+        pages, 
+        activePageIdx: 0, 
+        fingerprint, 
+        wsEndpoint: browser.wsEndpoint(), 
+        createdAt: new Date().toISOString(), 
+        userDataDir 
+      };
+      
       db.run(
         `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
       );
-      res.json({ id, wsEndpoint: browser.wsEndpoint(), fingerprint });
+      
+      res.json({ 
+        id, 
+        wsEndpoint: browser.wsEndpoint(), 
+        fingerprint,
+        memoryInfo: canCreate
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -340,6 +366,290 @@ module.exports = function(browsers, db) {
       await advancedOpManager.preloadResources(req.params.id, page);
 
       res.json({ success: true, message: '资源预加载完成' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 抖音专用统计 API
+  router.get('/douyin/stats', async (req, res) => {
+    try {
+      const stats = await douyinManager.getDouyinStats();
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 检查抖音登录状态 API
+  router.get('/:id/douyin/login-status', async (req, res) => {
+    const inst = browsers[req.params.id];
+    if (!inst) return res.status(404).json({ error: 'not found' });
+    
+    try {
+      const page = inst.pages[inst.activePageIdx || 0];
+      
+      if (!page) {
+        return res.json({ error: 'no active page' });
+      }
+      
+      const loginStatus = await douyinManager.checkDouyinLoginStatus(page);
+      res.json({
+        instanceId: req.params.id,
+        loginStatus,
+        timestamp: Date.now()
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 抖音实例维护 API
+  router.post('/douyin/maintenance', async (req, res) => {
+    try {
+      await douyinManager.performDouyinMaintenance();
+      res.json({ success: true, message: '抖音维护完成' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 创建抖音专用实例 API
+  router.post('/douyin/create', async (req, res) => {
+    try {
+      const canCreate = douyinManager.canCreateNewInstance();
+      if (!canCreate.allowed) {
+        return res.status(429).json({ 
+          error: canCreate.reason,
+          details: canCreate
+        });
+      }
+
+      const id = crypto.randomUUID();
+      const userDataDir = path.join(config.browser.userDataDir, id);
+      const url = 'https://www.douyin.com';
+
+      const { browser, instanceId } = await douyinManager.createDouyinOptimizedBrowser({
+        userDataDir,
+        instanceId: id
+      });
+
+      const page = await douyinManager.createDouyinOptimizedPage(browser);
+      
+      // 导航到抖音
+      const navResult = await douyinManager.navigateToDouyinWithLogin(page, { url });
+      
+      // 启动登录保活
+      await douyinManager.keepLoginActive(page);
+
+      const pages = [page];
+      setupBrowserEvents(browser, pages, id, browsers);
+
+      browsers[id] = {
+        browser,
+        pages,
+        activePageIdx: 0,
+        fingerprint: { 
+          userAgent: await page.evaluate(() => navigator.userAgent),
+          viewport: { width: 375, height: 812 }
+        },
+        wsEndpoint: browser.wsEndpoint(),
+        createdAt: new Date().toISOString(),
+        userDataDir,
+        isDouyinOptimized: true,
+        loginStatus: navResult.loginStatus
+      };
+
+      // 保存到数据库
+      db.run(
+        'INSERT INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [id, browsers[id].fingerprint.userAgent, JSON.stringify(browsers[id].fingerprint.viewport), browser.wsEndpoint(), browsers[id].createdAt, userDataDir, url]
+      );
+
+      res.json({
+        id,
+        message: '抖音专用实例创建成功',
+        loginStatus: navResult.loginStatus,
+        wsEndpoint: browser.wsEndpoint(),
+        createdAt: browsers[id].createdAt
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 超低内存模式统计 API
+  router.get('/memory/ultra-stats', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      const stats = await memoryManager.getEnhancedMemoryStats();
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 内存使用统计 API
+  router.get('/memory/stats', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      
+      // 优先使用增强统计，回退到基础统计
+      let stats;
+      if (typeof memoryManager.getEnhancedMemoryStats === 'function') {
+        stats = await memoryManager.getEnhancedMemoryStats();
+      } else {
+        stats = await memoryManager.getMemoryStats();
+      }
+      
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 实例休眠 API
+  router.post('/:id/hibernate', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      
+      if (typeof memoryManager.hibernateInstance === 'function') {
+        await memoryManager.hibernateInstance(req.params.id);
+        res.json({ success: true, message: '实例已休眠' });
+      } else {
+        res.status(501).json({ error: '当前模式不支持休眠功能' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 实例唤醒 API
+  router.post('/:id/wakeup', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      
+      if (typeof memoryManager.wakeupInstance === 'function') {
+        const result = await memoryManager.wakeupInstance(req.params.id);
+        res.json({ success: true, result, message: '实例已唤醒' });
+      } else {
+        res.status(501).json({ error: '当前模式不支持唤醒功能' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 紧急内存释放 API
+  router.post('/memory/emergency-release', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      
+      if (typeof memoryManager.emergencyMemoryRelease === 'function') {
+        await memoryManager.emergencyMemoryRelease();
+        res.json({ success: true, message: '紧急内存释放完成' });
+      } else {
+        // 回退到标准清理
+        await memoryManager.performMemoryCleanup();
+        res.json({ success: true, message: '标准内存清理完成' });
+      }
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 全局内存优化 API
+  router.post('/memory/optimize', async (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      
+      // 使用更激进的清理方法
+      if (typeof memoryManager.performAggressiveCleanup === 'function') {
+        await memoryManager.performAggressiveCleanup();
+      } else {
+        await memoryManager.performMemoryCleanup();
+      }
+      
+      // 强制垃圾回收
+      if (global.gc) {
+        global.gc();
+      }
+
+      res.json({ success: true, message: '全局内存优化完成' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 检查是否可以创建新实例
+  router.get('/memory/can-create', (req, res) => {
+    try {
+      const { memoryManager } = require('../browserManager');
+      const canCreate = memoryManager.canCreateNewInstance();
+      res.json(canCreate);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 批量创建实例 API（内存优化版）
+  router.post('/batch-create', async (req, res) => {
+    try {
+      const { count = 1, url = config.browser.defaultUrl } = req.body;
+      const { memoryManager } = require('../browserManager');
+      
+      if (count > 10) {
+        return res.status(400).json({ error: '单次最多创建10个实例' });
+      }
+
+      const results = [];
+      const errors = [];
+
+      for (let i = 0; i < count; i++) {
+        try {
+          const canCreate = memoryManager.canCreateNewInstance();
+          if (!canCreate.allowed) {
+            errors.push(`第${i+1}个实例: ${canCreate.reason}`);
+            break;
+          }
+
+          const id = crypto.randomUUID();
+          const fingerprint = randomFingerprint();
+          const userDataDir = path.join(config.browser.userDataDir, id);
+          let processedUrl = url;
+          if (!/^https?:\/\//.test(processedUrl)) processedUrl = 'https://' + processedUrl;
+          
+          const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url: processedUrl });
+          const pages = [page];
+          
+          setupBrowserEvents(browser, pages, id, browsers);
+          browsers[id] = { 
+            browser, 
+            pages, 
+            activePageIdx: 0, 
+            fingerprint, 
+            wsEndpoint: browser.wsEndpoint(), 
+            createdAt: new Date().toISOString(), 
+            userDataDir 
+          };
+          
+          db.run(
+            `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, processedUrl]
+          );
+          
+          results.push({ id, wsEndpoint: browser.wsEndpoint(), fingerprint });
+        } catch (error) {
+          errors.push(`第${i+1}个实例: ${error.message}`);
+        }
+      }
+
+      res.json({ 
+        success: results.length > 0,
+        created: results.length,
+        instances: results,
+        errors: errors.length > 0 ? errors : undefined
+      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }

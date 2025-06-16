@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>抖音优化测试页面</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 2.5em;
+        }
+        
+        .test-section {
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+        
+        .btn {
+            background: linear-gradient(45deg, #ff6b6b, #ff8e8e);
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 10px;
+        }
+        
+        .status.success { background: #4CAF50; }
+        .status.error { background: #f44336; }
+        .status.warning { background: #FF9800; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎵 抖音优化测试控制台</h1>
+        
+        <div class="test-section">
+            <h3>📊 系统状态检查</h3>
+            <button class="btn" onclick="checkSystemStatus()">检查系统状态</button>
+            <button class="btn" onclick="checkMemoryUsage()">检查内存使用</button>
+            <div id="systemResult" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🎭 抖音专用功能</h3>
+            <button class="btn" onclick="createDouyinInstance()">创建抖音实例</button>
+            <button class="btn" onclick="getDouyinStats()">抖音统计</button>
+            <button class="btn" onclick="douyinMaintenance()">抖音维护</button>
+            <div id="douyinResult" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🧠 内存优化功能</h3>
+            <button class="btn" onclick="emergencyRelease()">紧急内存释放</button>
+            <button class="btn" onclick="ultraStats()">超低内存统计</button>
+            <button class="btn" onclick="hibernateInstances()">休眠空闲实例</button>
+            <div id="memoryResult" class="result"></div>
+        </div>
+        
+        <div class="test-section">
+            <h3>🚀 实例管理</h3>
+            <button class="btn" onclick="listInstances()">列出所有实例</button>
+            <button class="btn" onclick="createNormalInstance()">创建普通实例</button>
+            <button class="btn" onclick="deleteAllInstances()">删除所有实例</button>
+            <div id="instanceResult" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        // 系统状态检查
+        async function checkSystemStatus() {
+            const result = document.getElementById('systemResult');
+            result.textContent = '检查中...';
+            
+            try {
+                const response = await fetch('/api/browsers/memory/ultra-stats');
+                const data = await response.json();
+                
+                result.innerHTML = `系统状态报告：
+内存压力等级: ${data.memoryPressureText} (Level ${data.memoryPressureLevel})
+活跃实例: ${data.activeInstances}/${data.maxActiveInstances}
+休眠实例: ${data.hibernatedInstances}
+总实例数: ${data.totalInstances}/${data.maxTotalInstances}
+系统内存: ${data.systemMemory.used.toFixed(1)}GB / ${data.systemMemory.total.toFixed(1)}GB (${data.systemMemory.usagePercent}%)`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function checkMemoryUsage() {
+            const result = document.getElementById('systemResult');
+            result.textContent = '检查内存中...';
+            
+            try {
+                const response = await fetch('/api/browsers/memory/can-create');
+                const data = await response.json();
+                
+                const status = data.allowed ? 'success' : 'warning';
+                result.innerHTML = `内存创建检查：
+状态: <span class="status ${status}">${data.allowed ? '可创建' : '受限'}</span>
+原因: ${data.reason}
+当前实例: ${data.currentInstances || data.activeInstances}
+内存使用: ${data.memoryUsage}%`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        // 抖音专用功能
+        async function createDouyinInstance() {
+            const result = document.getElementById('douyinResult');
+            result.textContent = '创建抖音实例中...';
+            
+            try {
+                const response = await fetch('/api/browsers/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: 'https://www.douyin.com' })
+                });
+                const data = await response.json();
+                
+                if (data.id) {
+                    result.innerHTML = `✅ 抖音实例创建成功！
+实例ID: ${data.id}
+WebSocket: ${data.wsEndpoint}
+创建时间: ${data.createdAt}
+登录状态: ${data.loginStatus ? '已检测' : '需检查'}`;
+                } else {
+                    result.innerHTML = `❌ 创建失败: ${data.error}`;
+                }
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function getDouyinStats() {
+            const result = document.getElementById('douyinResult');
+            result.textContent = '获取抖音统计中...';
+            
+            try {
+                const response = await fetch('/api/browsers/douyin/stats');
+                const data = await response.json();
+                
+                result.innerHTML = `抖音实例统计：
+总实例数: ${data.totalInstances}
+抖音实例: ${data.douyinInstances.length}
+已登录: ${data.loginStatusSummary.loggedIn}
+未登录: ${data.loginStatusSummary.loggedOut}
+未知状态: ${data.loginStatusSummary.unknown}
+最大实例数: ${data.maxInstances}`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function douyinMaintenance() {
+            const result = document.getElementById('douyinResult');
+            result.textContent = '执行抖音维护中...';
+            
+            try {
+                const response = await fetch('/api/browsers/douyin/maintenance', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                result.innerHTML = `维护结果：
+${data.success ? '✅ 维护成功' : '❌ 维护失败'}
+消息: ${data.message || data.error}`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        // 内存优化功能
+        async function emergencyRelease() {
+            const result = document.getElementById('memoryResult');
+            result.textContent = '执行紧急内存释放中...';
+            
+            try {
+                const response = await fetch('/api/browsers/memory/emergency-release', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                result.innerHTML = `紧急内存释放：
+${data.success ? '✅ 释放成功' : '❌ 释放失败'}
+消息: ${data.message || data.error}`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function ultraStats() {
+            const result = document.getElementById('memoryResult');
+            result.textContent = '获取超低内存统计中...';
+            
+            try {
+                const response = await fetch('/api/browsers/memory/ultra-stats');
+                const data = await response.json();
+                
+                result.innerHTML = `超低内存统计：
+内存压力: ${data.memoryPressureText} (${data.memoryPressureLevel}/3)
+活跃实例: ${data.activeInstances}/${data.maxActiveInstances}
+休眠实例: ${data.hibernatedInstances}
+总实例: ${data.totalInstances}/${data.maxTotalInstances}
+系统内存: ${data.systemMemory.usagePercent}%`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function hibernateInstances() {
+            const result = document.getElementById('memoryResult');
+            result.textContent = '休眠空闲实例中...';
+            
+            try {
+                // 模拟休眠逻辑
+                result.innerHTML = `休眠功能：
+⚠️ 此功能需要在实际环境中测试
+建议通过 WebSocket 或定期检查来触发休眠`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        // 实例管理
+        async function listInstances() {
+            const result = document.getElementById('instanceResult');
+            result.textContent = '获取实例列表中...';
+            
+            try {
+                const response = await fetch('/api/browsers');
+                const data = await response.json();
+                
+                if (Array.isArray(data)) {
+                    result.innerHTML = `实例列表 (${data.length}个)：
+${data.map(instance => 
+    `ID: ${instance.id.substring(0, 8)}...
+创建时间: ${new Date(instance.createdAt).toLocaleString()}
+页面数: ${instance.pages?.length || 0}
+${instance.isDouyinOptimized ? '🎵 抖音优化' : ''}
+`).join('\n')}`;
+                } else {
+                    result.textContent = '获取实例列表失败';
+                }
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function createNormalInstance() {
+            const result = document.getElementById('instanceResult');
+            result.textContent = '创建普通实例中...';
+            
+            try {
+                const response = await fetch('/api/browsers/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: 'https://example.com' })
+                });
+                const data = await response.json();
+                
+                if (data.id) {
+                    result.innerHTML = `✅ 普通实例创建成功！
+实例ID: ${data.id}
+URL: https://example.com
+优化模式: 超低内存`;
+                } else {
+                    result.innerHTML = `❌ 创建失败: ${data.error}`;
+                }
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        async function deleteAllInstances() {
+            const result = document.getElementById('instanceResult');
+            if (!confirm('确定要删除所有实例吗？')) return;
+            
+            result.textContent = '删除所有实例中...';
+            
+            try {
+                // 先获取所有实例
+                const listResponse = await fetch('/api/browsers');
+                const instances = await listResponse.json();
+                
+                let deleteCount = 0;
+                for (const instance of instances) {
+                    try {
+                        await fetch(`/api/browsers/${instance.id}`, { method: 'DELETE' });
+                        deleteCount++;
+                    } catch (e) {
+                        console.warn('删除实例失败:', e);
+                    }
+                }
+                
+                result.innerHTML = `删除完成：
+成功删除: ${deleteCount} 个实例
+总实例数: ${instances.length}`;
+                
+            } catch (error) {
+                result.textContent = `错误: ${error.message}`;
+            }
+        }
+        
+        // 页面加载时自动检查系统状态
+        window.addEventListener('load', () => {
+            checkSystemStatus();
+        });
+        
+        // 每30秒自动刷新系统状态
+        setInterval(() => {
+            if (document.getElementById('systemResult').textContent !== '检查中...') {
+                checkSystemStatus();
+            }
+        }, 30000);
+    </script>
+</body>
+</html>
