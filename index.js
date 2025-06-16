@@ -2,6 +2,7 @@ const express = require('express');
 const puppeteer = require('puppeteer');
 const crypto = require('crypto');
 const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
 
 const app = express();
 app.use(express.json());
@@ -9,6 +10,20 @@ app.use(express.static(path.join(__dirname, 'static')));
 
 // Puppeteer 实例池
 const browsers = {};
+
+// SQLite 数据库
+const db = new sqlite3.Database(path.join(__dirname, 'browsers.db'));
+db.serialize(() => {
+  db.run(`CREATE TABLE IF NOT EXISTS browsers (
+    id TEXT PRIMARY KEY,
+    userAgent TEXT,
+    viewport TEXT,
+    wsEndpoint TEXT,
+    createdAt TEXT,
+    userDataDir TEXT,
+    url TEXT
+  )`);
+});
 
 // 随机生成浏览器指纹
 function randomFingerprint() {
@@ -47,6 +62,11 @@ app.post('/browsers/create', async (req, res) => {
     if (!/^https?:\/\//.test(url)) url = 'https://' + url;
     await page.goto(url);
     browsers[id] = { browser, page, fingerprint, wsEndpoint: browser.wsEndpoint(), createdAt: new Date().toISOString(), userDataDir };
+    // 记录到sqlite
+    db.run(
+      `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
+    );
     res.json({ id, wsEndpoint: browser.wsEndpoint(), fingerprint });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -139,6 +159,38 @@ wss.on('connection', (ws, req) => {
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'static', 'index.html'));
 });
+
+// 启动时自动恢复所有实例
+(async () => {
+  db.all('SELECT * FROM browsers', async (err, rows) => {
+    if (err) return;
+    for (const row of rows) {
+      try {
+        const browser = await puppeteer.launch({
+          headless: true,
+          userDataDir: row.userDataDir,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            `--window-size=${JSON.parse(row.viewport).width},${JSON.parse(row.viewport).height}`
+          ]
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent(row.userAgent);
+        await page.setViewport(JSON.parse(row.viewport));
+        if (row.url) await page.goto(row.url);
+        browsers[row.id] = {
+          browser,
+          page,
+          fingerprint: { userAgent: row.userAgent, viewport: JSON.parse(row.viewport) },
+          wsEndpoint: browser.wsEndpoint(),
+          createdAt: row.createdAt,
+          userDataDir: row.userDataDir
+        };
+      } catch {}
+    }
+  });
+})();
 
 // 启动服务
 const PORT = process.env.PORT || 3000;
