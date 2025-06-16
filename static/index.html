@@ -4,15 +4,52 @@
   <meta charset="UTF-8">
   <title>PuppeteerSharp 实例远程控制</title>
   <style>
-    body { display: flex; flex-direction: row; }
-    #main { flex: 1; }
-    #sidebar { width: 320px; border-left: 1px solid #ccc; padding: 10px; background: #fafbfc; }
-    #screen { border: 1px solid #ccc; cursor: crosshair; }
+    body { display: flex; flex-direction: row; margin: 0; font-family: Arial, sans-serif; }
+    #main { flex: 1; padding: 10px; }
+    #sidebar { 
+      width: 320px; 
+      border-left: 1px solid #ccc; 
+      padding: 10px; 
+      overflow-y: auto; 
+      background-color: #f9f9f9; 
+    }
+    #screen { border: 1px solid #ccc; cursor: crosshair; display: block; }
     #instanceList { font-size: 14px; }
-    #instanceList .item { margin-bottom: 8px; border-bottom: 1px dashed #ddd; padding-bottom: 4px; }
+    #instanceList .item { 
+      margin-bottom: 8px; 
+      border-bottom: 1px dashed #ddd; 
+      padding-bottom: 4px; 
+      background: white;
+      padding: 8px;
+      border-radius: 4px;
+    }
     #instanceList .active { color: #1976d2; font-weight: bold; }
-    .tab-btn { padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; }
+    .tab-btn { 
+      padding: 4px 8px; 
+      border: 1px solid #ccc; 
+      border-radius: 4px; 
+      cursor: pointer; 
+      background: white;
+      margin: 2px;
+    }
     .tab-btn:hover { background: #f0f0f0; }
+    button { 
+      padding: 6px 12px; 
+      margin: 2px; 
+      border: 1px solid #ccc; 
+      border-radius: 4px; 
+      cursor: pointer; 
+      background: white;
+    }
+    button:hover { background: #f0f0f0; }
+    #createBtn { 
+      background: #1976d2; 
+      color: white; 
+      border: none; 
+      padding: 10px 20px;
+      font-size: 16px;
+    }
+    #createBtn:hover { background: #1565c0; }
   </style>
 </head>
 <body>
@@ -28,10 +65,6 @@
       </div>
     </div>
     <div id="msg"></div>
-    <div style="margin-top:20px;">
-      <input id="wsInput" type="text" placeholder="输入 wsEndpoint 远程连接" style="width:70%" />
-      <button id="connectRemoteBtn">远程连接</button>
-    </div>
     <div id="tabBar" style="margin:10px 0;"></div>
   </div>
   <div id="sidebar">
@@ -148,26 +181,6 @@
       }
     };
 
-    document.getElementById('connectRemoteBtn').onclick = async function() {
-      const wsEndpoint = document.getElementById('wsInput').value.trim();
-      if (!wsEndpoint) return alert('请输入 wsEndpoint');
-      const res = await fetch('/browser/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ wsEndpoint })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        instanceId = data.id;
-        document.getElementById('instanceId').innerText = instanceId;
-        startWebSocket();
-        loadInstanceList();
-        document.getElementById('msg').innerText = '远程连接成功';
-      } else {
-        document.getElementById('msg').innerText = '远程连接失败';
-      }
-    };
-
     window.copyWsEndpoint = function(e, ws) {
       e.stopPropagation();
       navigator.clipboard.writeText(ws).then(() => {
@@ -175,26 +188,35 @@
       });
     };
 
-    window.deleteInstance = async function(id) {
-      if (!confirm('确定要删除该实例吗？')) return;
-      const res = await fetch(`/browsers/${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        if (instanceId === id) {
-          instanceId = '';
-          document.getElementById('instanceId').innerText = '';
-          if (ws) ws.close();
+    // 实例列表事件委托，修复删除按钮
+    const instanceListDiv = document.getElementById('instanceList');
+    instanceListDiv.onclick = async function(e) {
+      const delBtn = e.target.closest('button');
+      if (!delBtn) return;
+      if (delBtn.textContent === '删除') {
+        const id = delBtn.parentElement.querySelector('div').textContent.replace('ID: ','').trim();
+        if (!confirm('确定要删除该实例吗？')) return;
+        const res = await fetch(`/browsers/${id}`, { method: 'DELETE' });
+        if (res.ok) {
+          if (instanceId === id) {
+            instanceId = '';
+            document.getElementById('instanceId').innerText = '';
+            if (ws) ws.close();
+          }
+          loadInstanceList();
+          setTimeout(loadTabs, 300);
+        } else {
+          document.getElementById('msg').innerText = '删除失败';
         }
-        loadInstanceList();
-        setTimeout(loadTabs, 300);
-      } else {
-        document.getElementById('msg').innerText = '删除失败';
       }
     };
 
     function startWebSocket() {
       if (!instanceId) return;
       if (ws) ws.close();
-      ws = new WebSocket(`ws://${location.host}/browsers/ws/operate/${instanceId}`);
+      // 自动检测协议
+      const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${wsProtocol}://${location.host}/browsers/ws/operate/${instanceId}`);
       ws.binaryType = 'arraybuffer';
       ws.onmessage = e => {
         if (e.data instanceof ArrayBuffer) {
@@ -232,13 +254,18 @@
       if (!ws || ws.readyState !== 1) return;
       const img = e.target;
       const rect = img.getBoundingClientRect();
-      const naturalWidth = img.naturalWidth || 800;
-      const naturalHeight = img.naturalHeight || 600;
+      // 取 naturalWidth/naturalHeight，若为0则用 800x600 兜底
+      const naturalWidth = img.naturalWidth > 0 ? img.naturalWidth : 800;
+      const naturalHeight = img.naturalHeight > 0 ? img.naturalHeight : 600;
       const displayWidth = rect.width;
       const displayHeight = rect.height;
+      // 鼠标在图片上的相对坐标
       const x = Math.round(e.offsetX * naturalWidth / displayWidth);
       const y = Math.round(e.offsetY * naturalHeight / displayHeight);
-      ws.send(JSON.stringify({type: 'click', payload: {x, y}}));
+      ws.send(JSON.stringify({
+        type: 'click',
+        payload: { x, y, naturalWidth, naturalHeight, displayWidth, displayHeight }
+      }));
     };
 
     let remoteCursor = document.getElementById('remote-cursor');
