@@ -4,21 +4,43 @@ const path = require('path');
 const fs = require('fs');
 const config = require('./config');
 
+// 检测 Chromium 路径
+function detectChromiumPath() {
+  const candidates = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+    '/opt/google/chrome/chrome',
+    '/usr/bin/google-chrome',
+  ];
+  
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      console.log(`抖音管理器检测到浏览器: ${p}`);
+      return p;
+    }
+  }
+  
+  console.warn('抖音管理器未检测到系统浏览器，将使用 Puppeteer 内置 Chrome');
+  return null;
+}
+
+const chromiumPath = detectChromiumPath();
+
 class DouyinOptimizedBrowserManager {
   constructor() {
     this.browserInstances = new Map();
     this.maxInstances = this.calculateMaxInstancesForDouyin();
     this.douyinDomain = 'www.douyin.com';
     
-    // 抖音专用优化配置
+    // 抖音专用优化配置 - 纯PC桌面模式
     this.douyinConfig = {
       enableJS: true,          // 抖音需要JS
       enableImages: true,      // 保留图片以维持正常体验
       disableVideo: true,      // 禁用视频节省带宽和内存
       keepCookies: true,       // 保持登录状态
       networkActive: true,     // 保持网络活跃
-      blockAds: true,          // 阻断广告
-      optimizeForMobile: true  // 使用移动版优化
+      blockAds: true           // 阻断广告
     };
 
     // 开始定时维护
@@ -45,8 +67,9 @@ class DouyinOptimizedBrowserManager {
     }
 
     const douyinOptimizedOptions = {
-      headless: false, // 抖音可能需要非headless模式来避免检测
-      ...options,
+      ...options, // 先应用传入的选项
+      headless: true, // 强制覆盖为 headless 模式
+      executablePath: chromiumPath, // 使用系统 Chromium
       args: [
         // 基础优化参数
         '--no-sandbox',
@@ -55,8 +78,8 @@ class DouyinOptimizedBrowserManager {
         '--disable-web-security',
         '--disable-site-isolation-trials',
         
-        // 抖音专用优化
-        '--window-size=375,812', // 模拟iPhone尺寸
+        // 抖音专用优化 - 使用桌面尺寸
+        '--window-size=1366,768', // 标准桌面尺寸
         '--max-old-space-size=200', // 为JS运行分配足够内存
         '--disable-background-timer-throttling',
         '--disable-renderer-backgrounding',
@@ -78,6 +101,13 @@ class DouyinOptimizedBrowserManager {
         '--disable-print-preview',
         '--disable-default-apps',
         '--disable-sync',
+        
+        // 服务器环境必需参数
+        '--disable-gpu',
+        '--disable-software-rasterizer',
+        '--virtual-time-budget=100000',
+        '--disable-logging',
+        '--disable-domain-reliability',
         
         // 用户数据目录
         `--user-data-dir=${options.userDataDir}`
@@ -117,172 +147,174 @@ class DouyinOptimizedBrowserManager {
     return page;
   }
 
-  // 抖音页面优化
+  // 抖音页面优化 - 纯PC桌面模式（分阶段优化避免Frame分离）
   async optimizePageForDouyin(page, options = {}) {
     try {
-      // 设置移动设备User-Agent（抖音对移动端更友好）
-      await page.setUserAgent('Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1');
-      
-      // 设置移动设备视口
-      await page.setViewport({
-        width: 375,
-        height: 812,
-        deviceScaleFactor: 3,
-        isMobile: true,
-        hasTouch: true,
-        isLandscape: false
-      });
+      // 确保页面有效
+      if (!page || page.isClosed()) {
+        throw new Error('页面无效或已关闭');
+      }
 
-      // 设置请求拦截 - 抖音专用
-      await page.setRequestInterception(true);
-      
-      page.on('request', (req) => {
-        const url = req.url();
-        const resourceType = req.resourceType();
-        
-        // 阻断视频和大文件
-        if (resourceType === 'media' || 
-            url.includes('.mp4') || 
-            url.includes('.webm') || 
-            url.includes('.mov') ||
-            url.includes('video') ||
-            url.includes('/aweme/v1/play/') || // 抖音视频接口
-            url.includes('/aweme/v1/video/')) {
-          console.log('🚫 阻断视频资源:', url.substring(0, 100));
-          req.abort();
-          return;
-        }
-        
-        // 阻断广告
-        if (url.includes('/commercial/') ||
-            url.includes('/ad/') ||
-            url.includes('analytics') ||
-            url.includes('track') ||
-            resourceType === 'beacon') {
-          req.abort();
-          return;
-        }
-        
-        // 允许必要资源
-        if (resourceType === 'document' ||
-            resourceType === 'script' ||
-            resourceType === 'stylesheet' ||
-            resourceType === 'image' ||
-            resourceType === 'xhr' ||
-            resourceType === 'fetch') {
-          req.continue();
-        } else {
-          req.abort();
-        }
-      });
+      console.log('🔧 开始抖音页面优化...');
 
-      // 注入抖音专用优化脚本
+      // 第一阶段：基础配置
+      await page.setUserAgent(config.douyin.desktopUserAgent);
+      page.setDefaultNavigationTimeout(60000); // 延长超时
+      page.setDefaultTimeout(30000);
+
+      // 第二阶段：轻量级脚本注入（避免复杂操作）
       await page.evaluateOnNewDocument(() => {
-        // 禁用视频自动播放
-        Object.defineProperty(HTMLMediaElement.prototype, 'play', {
-          writable: true,
-          value: function() {
-            console.log('🚫 视频播放被阻断');
-            return Promise.resolve();
-          }
-        });
+        // 简化的优化脚本，避免过度干预导致页面分离
+        window.douyinOptimized = true;
         
-        // 禁用视频加载
-        Object.defineProperty(HTMLVideoElement.prototype, 'load', {
-          writable: true,
-          value: function() {
-            console.log('🚫 视频加载被阻断');
-          }
-        });
-        
-        // 保持网络活跃 - 定期发送心跳
-        window.douyinKeepAlive = setInterval(() => {
-          // 发送小型请求保持连接
-          fetch('/api/v1/heartbeat', { 
-            method: 'POST',
-            body: JSON.stringify({timestamp: Date.now()}),
-            headers: {'Content-Type': 'application/json'}
-          }).catch(() => {}); // 忽略错误
-        }, 30000); // 每30秒一次
-        
-        // 优化滚动性能
-        let scrollTimeout;
-        const originalAddEventListener = EventTarget.prototype.addEventListener;
-        EventTarget.prototype.addEventListener = function(type, listener, options) {
-          if (type === 'scroll') {
-            const throttledListener = function(e) {
-              clearTimeout(scrollTimeout);
-              scrollTimeout = setTimeout(() => listener(e), 16); // 60fps限制
-            };
-            return originalAddEventListener.call(this, type, throttledListener, options);
-          }
-          return originalAddEventListener.call(this, type, listener, options);
-        };
-        
-        // 阻断视频相关API
-        if (window.MediaSource) {
-          window.MediaSource = class MockMediaSource {
-            constructor() {
-              console.log('🚫 MediaSource被模拟');
-            }
+        // 仅在页面加载完成后执行视频优化
+        document.addEventListener('DOMContentLoaded', () => {
+          // 轻量级视频处理
+          const handleVideo = () => {
+            const videos = document.querySelectorAll('video');
+            videos.forEach(video => {
+              video.muted = true;
+              video.preload = 'none';
+            });
           };
-        }
-        
-        // 模拟触摸设备
-        Object.defineProperty(navigator, 'maxTouchPoints', {
-          get: () => 5
+          
+          handleVideo();
+          // 延迟再次执行
+          setTimeout(handleVideo, 3000);
         });
         
-        console.log('✅ 抖音页面优化完成');
+        console.log('✅ 抖音轻量级优化脚本注入完成');
       });
 
-      // 设置更长的导航超时（抖音加载较慢）
-      page.setDefaultNavigationTimeout(30000);
-      page.setDefaultTimeout(15000);
-
-      console.log('✅ 抖音页面优化配置完成');
+      console.log('✅ 抖音页面基础优化完成');
 
     } catch (error) {
       console.warn('⚠️ 抖音页面优化失败:', error.message);
+      // 不抛出错误，允许页面继续使用
     }
   }
 
-  // 导航到抖音并保持登录状态
+  // 延迟应用高级优化（在页面导航成功后）
+  async applyAdvancedDouyinOptimization(page) {
+    try {
+      if (!page || page.isClosed()) {
+        return;
+      }
+
+      console.log('🔧 应用抖音高级优化...');
+
+      // 设置请求拦截（页面稳定后）
+      try {
+        await page.setRequestInterception(true);
+        
+        page.on('request', (req) => {
+          const url = req.url();
+          const resourceType = req.resourceType();
+          
+          // 简化的资源过滤
+          if (resourceType === 'media' || 
+              url.includes('.mp4') || 
+              url.includes('video')) {
+            req.abort();
+            return;
+          }
+          
+          // 允许其他资源
+          req.continue();
+        });
+      } catch (interceptError) {
+        console.warn('⚠️ 高级优化设置失败:', interceptError.message);
+      }
+
+      // 页面级优化
+      await page.evaluate(() => {
+        // 更激进的视频处理
+        const blockVideos = () => {
+          const videos = document.querySelectorAll('video');
+          videos.forEach(video => {
+            video.pause();
+            video.src = '';
+            video.style.display = 'none';
+          });
+        };
+        
+        blockVideos();
+        
+        // 定期清理
+        setInterval(blockVideos, 5000);
+      });
+
+      console.log('✅ 抖音高级优化应用完成');
+
+    } catch (error) {
+      console.warn('⚠️ 应用高级优化失败:', error.message);
+    }
+  }
+
+  // 导航到抖音并保持登录状态（改进版本）
   async navigateToDouyinWithLogin(page, options = {}) {
     try {
       console.log('🚀 正在导航到抖音...');
       
-      // 首先导航到抖音主页
+      // 确保页面有效且未关闭
+      if (!page || page.isClosed()) {
+        throw new Error('页面无效或已关闭');
+      }
+      
+      // 简单等待，避免操作过于激进
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // 导航到抖音主页，使用最简单的等待策略
       await page.goto('https://www.douyin.com', {
         waitUntil: 'domcontentloaded',
-        timeout: 30000
+        timeout: 60000
       });
       
-      // 等待页面稳定
-      await page.waitForTimeout(3000);
+      // 等待页面基本稳定
+      await new Promise(resolve => setTimeout(resolve, 3000));
       
-      // 检查登录状态
-      const loginStatus = await this.checkDouyinLoginStatus(page);
-      console.log('📱 抖音登录状态:', loginStatus);
-      
-      // 如果未登录，等待用户登录
-      if (!loginStatus.isLoggedIn) {
-        console.log('⏳ 等待用户登录抖音...');
-        // 这里可以添加自动登录逻辑或等待手动登录
+      // 验证页面URL
+      const currentUrl = page.url();
+      if (!currentUrl.includes('douyin.com')) {
+        throw new Error(`页面导航失败，当前URL: ${currentUrl}`);
       }
+      
+      console.log('✅ 抖音页面导航成功:', currentUrl);
+      
+      // 页面稳定后应用高级优化
+      setTimeout(() => {
+        this.applyAdvancedDouyinOptimization(page).catch(err => 
+          console.warn('高级优化失败:', err.message)
+        );
+      }, 5000);
+      
+      // 检查登录状态（简化版本）
+      let loginStatus = { isLoggedIn: false };
+      try {
+        loginStatus = await page.evaluate(() => {
+          const hasLoginButton = document.querySelector('[class*="login"]');
+          const hasCookies = document.cookie.length > 10;
+          return {
+            isLoggedIn: !hasLoginButton && hasCookies,
+            cookieCount: document.cookie.length
+          };
+        });
+      } catch (e) {
+        console.warn('登录状态检查失败:', e.message);
+      }
+      
+      console.log('📱 抖音登录状态:', loginStatus);
       
       return {
         success: true,
         loginStatus,
-        message: '抖音页面加载完成'
+        message: '抖音页面加载完成',
+        url: currentUrl
       };
       
     } catch (error) {
       console.error('❌ 抖音导航失败:', error.message);
-      return {
-        success: false,
-        error: error.message
-      };
+      throw error; // 重新抛出错误以便上层处理
     }
   }
 

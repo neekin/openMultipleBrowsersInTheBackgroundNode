@@ -11,12 +11,24 @@ const ultraMemoryManager = new UltraLowMemoryManager();
 const fallbackManager = new MemoryOptimizedBrowserManager();
 const douyinManager = new DouyinOptimizedManager(); // 抖音专用管理器
 
-// 自动检测 chromium 路径
+// 自动检测 chromium 路径 - 针对 ARM64 优化
 function detectChromiumPath() {
-  const candidates = ['/usr/bin/chromium', '/usr/bin/chromium-browser', '/snap/bin/chromium'];
+  const candidates = [
+    '/usr/bin/chromium',           // 标准路径
+    '/usr/bin/chromium-browser',   // 备选路径
+    '/snap/bin/chromium',          // Snap 路径
+    '/opt/google/chrome/chrome',   // Google Chrome
+    '/usr/bin/google-chrome',      // 备选 Chrome 路径
+  ];
+  
   for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+    if (fs.existsSync(p)) {
+      console.log(`检测到浏览器: ${p}`);
+      return p;
+    }
   }
+  
+  console.warn('未检测到系统浏览器，将使用 Puppeteer 内置 Chrome');
   return null;
 }
 const chromiumPath = detectChromiumPath();
@@ -159,7 +171,69 @@ async function launchBrowser({ userDataDir, fingerprint, url }) {
 }
 
 async function restoreBrowser(row) {
-  // 检查是否可以创建新实例
+  // 检测是否是抖音实例
+  const isDouyinInstance = row.url && row.url.includes('douyin.com');
+  
+  if (isDouyinInstance) {
+    console.log(`🎵 恢复抖音优化实例: ${row.id}`);
+    
+    // 检查抖音管理器是否可以创建新实例
+    const canCreate = douyinManager.canCreateNewInstance();
+    if (!canCreate.allowed) {
+      throw new Error(`抖音实例恢复失败: ${canCreate.reason}`);
+    }
+
+    try {
+      const { browser, instanceId } = await douyinManager.createDouyinOptimizedBrowser({
+        userDataDir: row.userDataDir,
+        instanceId: row.id
+      });
+
+      // 获取或创建页面
+      const pages = await browser.pages();
+      let page;
+      
+      if (pages.length === 0) {
+        page = await douyinManager.createDouyinOptimizedPage(browser);
+      } else {
+        page = pages[0];
+        // 重新应用抖音优化
+        await douyinManager.optimizePageForDouyin(page);
+      }
+
+      // 恢复用户代理和视口
+      const viewport = JSON.parse(row.viewport);
+      await page.setUserAgent(row.userAgent);
+      await page.setViewport(viewport);
+
+      // 导航到存储的抖音URL
+      if (row.url && row.url !== 'about:blank') {
+        try {
+          console.log(`恢复抖音实例 ${row.id} 时导航到: ${row.url}`);
+          const navResult = await douyinManager.navigateToDouyinWithLogin(page, { url: row.url });
+          
+          // 启动登录保活
+          await douyinManager.keepLoginActive(page);
+          
+          console.log(`抖音实例 ${row.id} 恢复成功，登录状态: ${navResult.loginStatus}`);
+        } catch (e) {
+          console.warn(`抖音实例 ${row.id} 导航失败:`, e.message);
+        }
+      }
+
+      return { 
+        browser, 
+        pages: [page], 
+        instanceId,
+        isDouyinOptimized: true
+      };
+    } catch (error) {
+      console.error(`恢复抖音实例 ${row.id} 失败:`, error.message);
+      throw error;
+    }
+  }
+
+  // 非抖音实例使用原有逻辑
   const canCreate = ultraMemoryManager.canCreateNewInstance();
   if (!canCreate.allowed) {
     // 尝试唤醒休眠实例
@@ -197,8 +271,11 @@ async function restoreBrowser(row) {
       });
       await page.setUserAgent(row.userAgent);
       await page.setViewport(viewport);
-      if (row.url) {
+      
+      // 导航到数据库中存储的URL
+      if (row.url && row.url !== 'about:blank') {
         try {
+          console.log(`恢复实例 ${row.id} 时导航到: ${row.url}`);
           await page.goto(row.url, { 
             waitUntil: 'domcontentloaded',
             timeout: 10000 
@@ -209,7 +286,7 @@ async function restoreBrowser(row) {
       }
       pages.push(page);
     } else {
-      // 优化现有页面
+      // 优化现有页面并导航到存储的URL
       for (const page of pages) {
         await ultraMemoryManager.ultraOptimizePageMemory(page, {
           width: viewport.width,
@@ -219,6 +296,24 @@ async function restoreBrowser(row) {
         });
         await page.setUserAgent(row.userAgent);
         await page.setViewport(viewport);
+        
+        // 如果页面当前是about:blank或空白页，导航到存储的URL
+        if (row.url && row.url !== 'about:blank') {
+          try {
+            const currentUrl = page.url();
+            if (!currentUrl || currentUrl === 'about:blank' || currentUrl === '') {
+              console.log(`恢复实例 ${row.id} 时导航到: ${row.url}`);
+              await page.goto(row.url, { 
+                waitUntil: 'domcontentloaded',
+                timeout: 10000 
+              });
+            } else {
+              console.log(`实例 ${row.id} 页面已有内容 (${currentUrl})，跳过导航`);
+            }
+          } catch (e) {
+            console.warn(`实例 ${row.id} 导航失败:`, e.message);
+          }
+        }
       }
     }
 

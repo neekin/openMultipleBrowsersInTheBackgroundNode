@@ -2,7 +2,7 @@
 <html lang="zh-cn">
 <head>
   <meta charset="UTF-8">
-  <title>PuppeteerSharp 实例远程控制</title>
+  <title>Puppeteer实例远程控制</title>
   <style>
     body { display: flex; flex-direction: row; margin: 0; font-family: Arial, sans-serif; }
     #main { flex: 1; padding: 10px; }
@@ -69,6 +69,7 @@
   </div>
   <div id="sidebar">
     <h3>实例列表</h3>
+    <button onclick="cleanOfflineInstances()" style="margin-bottom:10px;background:#ff5722;color:white;border:none;">清理离线实例</button>
     <div id="instanceList">加载中...</div>
   </div>
   <script>
@@ -81,26 +82,42 @@
       const res = await fetch('/browsers');
       if (!res.ok) return document.getElementById('instanceList').innerText = '加载失败';
       const list = await res.json();
-      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'>
+      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}' style='${!i.online?"opacity:0.5;":""}'>
         <div>ID: ${i.id}</div>
         <div>UA: ${i.userAgent}</div>
         <div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div>
-        <button onclick='selectInstance("${i.id}")'>切换</button>
+        <div style='color:${i.online?"green":"red"};font-weight:bold;'>状态: ${i.online?"在线":"离线"}</div>
+        <button onclick='selectInstance("${i.id}", ${i.online})' ${!i.online?"disabled":""}>切换</button>
         <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button>
         <button onclick='deleteInstance("${i.id}")' style='color:#c00;margin-left:4px;'>删除</button>
       </div>`).join('');
       document.getElementById('instanceList').innerHTML = html || '暂无实例';
-      // 自动展示第一个实例
+      // 自动展示第一个在线实例
       if (!instanceId && list.length > 0) {
-        instanceId = list[0].id;
-        document.getElementById('instanceId').innerText = instanceId;
-        startWebSocket();
-        setTimeout(loadTabs, 300);
+        const firstOnline = list.find(i => i.online);
+        if (firstOnline) {
+          instanceId = firstOnline.id;
+          document.getElementById('instanceId').innerText = instanceId;
+          startWebSocket();
+          setTimeout(loadTabs, 300);
+        }
       }
     }
 
     async function loadTabs() {
       if (!instanceId) return;
+      
+      // 检查实例是否在线
+      const instanceRes = await fetch('/browsers');
+      if (instanceRes.ok) {
+        const instances = await instanceRes.json();
+        const currentInstance = instances.find(i => i.id === instanceId);
+        if (!currentInstance || !currentInstance.online) {
+          document.getElementById('tabBar').innerHTML = '<span style="color:red;">实例已离线，无法加载标签页</span>';
+          return;
+        }
+      }
+      
       // 通过 ws 主动拉取标签页，优先用 ws，失败再用 http
       if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify({type: 'getTabs'}));
@@ -154,7 +171,11 @@
       loadTabs();
     }
 
-    window.selectInstance = function(id) {
+    window.selectInstance = function(id, online) {
+      if (!online) {
+        alert('该实例已离线，无法切换');
+        return;
+      }
       instanceId = id;
       document.getElementById('instanceId').innerText = id;
       startWebSocket();
@@ -211,13 +232,28 @@
       }
     };
 
+    let wsReconnectCount = 0;
+    const maxReconnectAttempts = 5;
+    let wsReconnectTimeout = null;
+
     function startWebSocket() {
       if (!instanceId) return;
       if (ws) ws.close();
+      
       // 自动检测协议
       const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${wsProtocol}://${location.host}/browsers/ws/operate/${instanceId}`);
       ws.binaryType = 'arraybuffer';
+      
+      ws.onopen = () => {
+        document.getElementById('msg').innerText = 'WebSocket已连接';
+        wsReconnectCount = 0; // 重置重连计数
+        if (wsReconnectTimeout) {
+          clearTimeout(wsReconnectTimeout);
+          wsReconnectTimeout = null;
+        }
+      };
+      
       ws.onmessage = e => {
         if (e.data instanceof ArrayBuffer) {
           const url = URL.createObjectURL(new Blob([e.data], {type: 'image/jpeg'}));
@@ -229,7 +265,14 @@
           try {
             const data = JSON.parse(e.data);
             if (data.error) {
-              document.getElementById('msg').innerText = '截图错误: ' + data.error;
+              // 根据错误类型显示不同的信息
+              if (data.type === 'screenshot_error' && data.recoverable) {
+                document.getElementById('msg').innerText = data.error;
+                document.getElementById('msg').style.color = 'orange';
+              } else {
+                document.getElementById('msg').innerText = '错误: ' + data.error;
+                document.getElementById('msg').style.color = 'red';
+              }
             }
             if (data.cursor) {
               remoteCursor.style.left = (data.cursor.x-10) + 'px';
@@ -245,8 +288,29 @@
           } catch {}
         }
       };
-      ws.onclose = () => document.getElementById('msg').innerText = 'WebSocket已关闭';
-      ws.onerror = () => document.getElementById('msg').innerText = 'WebSocket错误';
+      
+      ws.onclose = (event) => {
+        document.getElementById('msg').innerText = 'WebSocket已关闭';
+        document.getElementById('msg').style.color = 'red';
+        
+        // 如果不是主动关闭，尝试重连
+        if (event.code !== 1000 && wsReconnectCount < maxReconnectAttempts) {
+          wsReconnectCount++;
+          const delay = Math.min(1000 * Math.pow(2, wsReconnectCount), 10000); // 指数退避，最大10秒
+          document.getElementById('msg').innerText = `WebSocket断开，${delay/1000}秒后重连 (${wsReconnectCount}/${maxReconnectAttempts})`;
+          wsReconnectTimeout = setTimeout(() => {
+            startWebSocket();
+          }, delay);
+        } else if (wsReconnectCount >= maxReconnectAttempts) {
+          document.getElementById('msg').innerText = 'WebSocket连接失败，请刷新页面重试';
+        }
+      };
+      
+      ws.onerror = (error) => {
+        document.getElementById('msg').innerText = 'WebSocket连接错误';
+        document.getElementById('msg').style.color = 'red';
+      };
+      
       setTimeout(loadTabs, 300);
     }
 
@@ -296,6 +360,25 @@
       if (!ws || ws.readyState !== 1) return;
       ws.send(JSON.stringify({type: 'wheel', payload: {deltaX: e.deltaX, deltaY: e.deltaY}}));
     });
+
+    // 清理离线实例
+    window.cleanOfflineInstances = async function() {
+      if (!confirm('确定要清理所有离线实例吗？这将删除它们的数据库记录和用户数据。')) return;
+      
+      try {
+        const res = await fetch('/browsers/offline', { method: 'DELETE' });
+        if (res.ok) {
+          const result = await res.json();
+          alert(result.message);
+          loadInstanceList(); // 刷新实例列表
+        } else {
+          const error = await res.json();
+          alert('清理失败: ' + error.error);
+        }
+      } catch (error) {
+        alert('清理失败: ' + error.message);
+      }
+    };
 
     loadInstanceList();
     setInterval(loadInstanceList, 5000);

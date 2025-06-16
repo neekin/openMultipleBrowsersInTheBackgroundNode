@@ -4,6 +4,29 @@ const path = require('path');
 const fs = require('fs');
 const config = require('./config');
 
+// 检测 Chromium 路径
+function detectChromiumPath() {
+  const candidates = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+    '/opt/google/chrome/chrome',
+    '/usr/bin/google-chrome',
+  ];
+  
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      console.log(`超低内存管理器检测到浏览器: ${p}`);
+      return p;
+    }
+  }
+  
+  console.warn('超低内存管理器未检测到系统浏览器，将使用 Puppeteer 内置 Chrome');
+  return null;
+}
+
+const chromiumPath = detectChromiumPath();
+
 class UltraLowMemoryManager {
   constructor() {
     this.browserInstances = new Map();
@@ -157,6 +180,7 @@ class UltraLowMemoryManager {
     // 创建新实例
     const ultraOptimizedOptions = {
       ...config.browser.launchOptions,
+      executablePath: chromiumPath, // 使用系统 Chromium
       ...options,
       args: [
         ...config.browser.launchOptions.args,
@@ -645,6 +669,23 @@ class UltraLowMemoryManager {
     const instance = this.browserInstances.get(instanceId);
     if (instance) {
       instance.lastUsed = Date.now();
+    }
+  }
+
+  // 休眠空闲实例
+  async hibernateIdleInstances(idleThreshold) {
+    const currentTime = Date.now();
+    const hibernatePromises = [];
+
+    for (const [instanceId, instance] of this.browserInstances.entries()) {
+      if (currentTime - instance.lastUsed > idleThreshold && !instance.isHibernated) {
+        hibernatePromises.push(this.hibernateInstance(instanceId));
+      }
+    }
+
+    if (hibernatePromises.length > 0) {
+      console.log(`正在休眠 ${hibernatePromises.length} 个空闲实例...`);
+      await Promise.all(hibernatePromises);
     }
   }
 }

@@ -4,6 +4,29 @@ const path = require('path');
 const fs = require('fs');
 const config = require('./config');
 
+// 检测 Chromium 路径
+function detectChromiumPath() {
+  const candidates = [
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium',
+    '/opt/google/chrome/chrome',
+    '/usr/bin/google-chrome',
+  ];
+  
+  for (const p of candidates) {
+    if (fs.existsSync(p)) {
+      console.log(`内存优化管理器检测到浏览器: ${p}`);
+      return p;
+    }
+  }
+  
+  console.warn('内存优化管理器未检测到系统浏览器，将使用 Puppeteer 内置 Chrome');
+  return null;
+}
+
+const chromiumPath = detectChromiumPath();
+
 class MemoryOptimizedBrowserManager {
   constructor() {
     this.browserInstances = new Map();
@@ -36,6 +59,7 @@ class MemoryOptimizedBrowserManager {
 
     const optimizedOptions = {
       ...config.browser.launchOptions,
+      executablePath: chromiumPath, // 使用系统 Chromium
       ...options,
       args: [
         ...config.browser.launchOptions.args,
