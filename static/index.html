@@ -14,7 +14,15 @@
       background-color: #f9f9f9; 
     }
     #screen { border: 1px solid #ccc; cursor: crosshair; display: block; }
-    #instanceList { font-size: 14px; }
+    #instanceList { 
+      font-size: 14px; 
+      max-height: 400px;
+      overflow-y: auto;
+      border: 1px solid #ddd;
+      padding: 8px;
+      background: white;
+      border-radius: 4px;
+    }
     #instanceList .item { 
       margin-bottom: 8px; 
       border-bottom: 1px dashed #ddd; 
@@ -22,8 +30,53 @@
       background: white;
       padding: 8px;
       border-radius: 4px;
+      position: relative;
     }
     #instanceList .active { color: #1976d2; font-weight: bold; }
+    .instance-header {
+      display: flex;
+      align-items: center;
+      margin-bottom: 4px;
+    }
+    .user-avatar {
+      display: flex;
+      align-items: center;
+      margin-left: 8px;
+    }
+    .user-avatar img {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      margin-right: 8px;
+      border: 1px solid #ddd;
+    }
+    .user-nickname {
+      font-size: 12px;
+      color: #666;
+      max-width: 100px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .login-status {
+      padding: 2px 6px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: bold;
+      margin-right: 8px;
+    }
+    .login-status.logged-in {
+      background: #4caf50;
+      color: white;
+    }
+    .login-status.not-logged-in {
+      background: #f44336;
+      color: white;
+    }
+    .login-status.checking {
+      background: #ff9800;
+      color: white;
+    }
     .tab-btn { 
       padding: 4px 8px; 
       border: 1px solid #ccc; 
@@ -81,14 +134,75 @@
       const res = await fetch('/browsers');
       if (!res.ok) return document.getElementById('instanceList').innerText = '加载失败';
       const list = await res.json();
-      const html = list.map(i => `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'>
-        <div>ID: ${i.id}</div>
-        <div>UA: ${i.userAgent}</div>
-        <div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div>
-        <button onclick='selectInstance("${i.id}")'>切换</button>
-        <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button>
-        <button onclick='deleteInstance("${i.id}")' style='color:#c00;margin-left:4px;'>删除</button>
-      </div>`).join('');
+      
+      // 获取登录监控统计信息
+      let loginStats = null;
+      try {
+        const statsRes = await fetch('/browsers/login-monitor/stats');
+        if (statsRes.ok) {
+          loginStats = await statsRes.json();
+        }
+      } catch (e) {
+        console.log('获取登录监控统计失败:', e);
+      }
+      
+      // 为每个实例匹配登录状态
+      const instancesWithLoginStatus = list.map(instance => {
+        let loginStatus = { isLoggedIn: null, checking: false, userInfo: null };
+        
+        if (loginStats && loginStats.monitors) {
+          const monitor = loginStats.monitors.find(m => 
+            instance.id.startsWith(m.instanceId)
+          );
+          if (monitor) {
+            loginStatus = {
+              isLoggedIn: monitor.isLoggedIn,
+              checking: false,
+              userInfo: monitor.avatarUrl ? { avatarUrl: monitor.avatarUrl } : null,
+              nextCheckInterval: monitor.nextCheckInterval
+            };
+          }
+        }
+        
+        return { ...instance, loginStatus };
+      });
+      
+      const html = instancesWithLoginStatus.map(i => {
+        let statusBadge = '';
+        let avatarHtml = '';
+        
+        if (i.loginStatus.checking) {
+          statusBadge = '<span class="login-status checking">检测中</span>';
+        } else if (i.loginStatus.isLoggedIn === true) {
+          statusBadge = `<span class="login-status logged-in">已登录 (${i.loginStatus.nextCheckInterval || '30分钟'})</span>`;
+          // 如果有头像URL，显示头像和昵称
+          if (i.loginStatus.userInfo && i.loginStatus.userInfo.avatarUrl) {
+            const nickname = i.loginStatus.userInfo.nickname || '未知用户';
+            avatarHtml = `<div class="user-avatar">
+              <img src="${i.loginStatus.userInfo.avatarUrl}" alt="用户头像" style="width: 24px; height: 24px; border-radius: 50%; margin-right: 8px;">
+              <span class="user-nickname" style="font-size: 12px; color: #666;">${nickname}</span>
+            </div>`;
+          }
+        } else if (i.loginStatus.isLoggedIn === false) {
+          statusBadge = `<span class="login-status not-logged-in">未登录 (${i.loginStatus.nextCheckInterval || '10秒'})</span>`;
+        } else {
+          statusBadge = '<span class="login-status checking">等待检测</span>';
+        }
+        
+        return `<div class='item${i.id===instanceId?" active":""}' data-ws='${i.wsEndpoint}'>
+          <div class="instance-header">
+            ${statusBadge}
+            ${avatarHtml}
+          </div>
+          <div>ID: ${i.id}</div>
+          <div>UA: ${i.userAgent}</div>
+          <div>创建: ${i.createdAt.replace('T',' ').replace('Z','')}</div>
+          <button onclick='selectInstance("${i.id}")'>切换</button>
+          <button onclick='copyWsEndpoint(event, "${i.wsEndpoint}")'>复制</button>
+          <button onclick='deleteInstance("${i.id}")' style='color:#c00;margin-left:4px;'>删除</button>
+        </div>`;
+      }).join('');
+      
       document.getElementById('instanceList').innerHTML = html || '暂无实例';
       // 自动展示第一个实例
       if (!instanceId && list.length > 0) {

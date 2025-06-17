@@ -175,8 +175,7 @@ module.exports = function(browsers, db) {
       const id = crypto.randomUUID();
       const fingerprint = randomFingerprint();
       const userDataDir = path.join(config.browser.userDataDir, id);
-      let url = req.body?.url || config.browser.defaultUrl;
-      if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+      const url = 'https://www.douyin.com'; // 固定打开抖音
       const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url });
       const pages = [page];
       setupBrowserEvents(browser, pages, id, browsers);
@@ -852,6 +851,112 @@ module.exports = function(browsers, db) {
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 获取登录监控统计
+  router.get('/login-monitor/stats', (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    const stats = global.loginMonitor.getMonitorStats();
+    res.json(stats);
+  });
+
+  // 手动触发登录状态检测
+  router.post('/login-monitor/trigger', async (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    try {
+      const instanceId = req.body.instanceId || null;
+      const result = await global.loginMonitor.triggerCheck(instanceId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 更新登录监控配置
+  router.post('/login-monitor/config', (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    try {
+      global.loginMonitor.updateConfig(req.body);
+      res.json({ success: true, message: '配置已更新' });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 检测实例登录状态
+  router.get('/:id/login-status', async (req, res) => {
+    const id = req.params.id;
+    const inst = browsers[id];
+    
+    if (!inst || !inst.browser || !inst.pages || inst.pages.length === 0) {
+      return res.status(404).json({ error: 'Instance not found or not ready' });
+    }
+    
+    try {
+      const page = inst.pages[inst.activePageIdx || 0];
+      
+      // 检测是否存在 id="login-panel-new" 的元素
+      const loginElement = await page.$('#login-panel-new');
+      
+      let userInfo = null;
+      
+      if (!loginElement) {
+        // 没有登录面板，检测用户头像和昵称
+        try {
+          const avatarElement = await page.$('[data-e2e="live-avatar"]');
+          let avatarUrl = null;
+          
+          if (avatarElement) {
+            // 提取头像元素内的图片地址
+            avatarUrl = await page.evaluate((element) => {
+              const img = element.querySelector('img');
+              return img ? img.src : null;
+            }, avatarElement);
+          }
+          
+          // 检测昵称（类名为 ChwkdccW 的元素）
+          const nicknameElement = await page.$('.ChwkdccW');
+          let nickname = null;
+          
+          if (nicknameElement) {
+            nickname = await page.evaluate((element) => {
+              return element.textContent ? element.textContent.trim() : null;
+            }, nicknameElement);
+          }
+          
+          userInfo = {
+            avatarUrl: avatarUrl,
+            nickname: nickname
+          };
+        } catch (avatarError) {
+          console.log(`获取用户信息失败 (${id}):`, avatarError.message);
+        }
+      }
+      
+      const isLoggedIn = !loginElement; // 如果没有登录面板，说明已登录
+      
+      res.json({
+        instanceId: id,
+        isLoggedIn: isLoggedIn,
+        hasLoginPanel: !!loginElement,
+        userInfo: userInfo,
+        url: page.url()
+      });
+    } catch (error) {
+      res.status(500).json({ 
+        error: 'Failed to check login status',
+        message: error.message 
+      });
     }
   });
 

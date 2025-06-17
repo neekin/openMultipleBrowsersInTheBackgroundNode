@@ -303,6 +303,16 @@ function setupWebSocket(server, browsers) {
       );
     }
     
+    // 启动登录状态监控
+    if (global.loginMonitor) {
+      global.loginMonitor.addInstanceMonitor(id);
+    }
+
+    // 启动登录状态监控
+    if (global.loginMonitor) {
+      global.loginMonitor.addInstanceMonitor(id);
+    }
+
     let activeIdx = inst.activePageIdx || 0;
 
     // 初始化高级管理器
@@ -571,7 +581,7 @@ function setupWebSocket(server, browsers) {
           ws.send(JSON.stringify({ error: e.message }));
         }
       }
-    });
+    }); // 关闭 ws.on('message') 监听器
   });
 }
 

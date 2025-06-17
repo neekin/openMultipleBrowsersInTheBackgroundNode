@@ -23,3 +23,4 @@ yarn-error.log*
 # Others
 *.log
 
+*.db

@@ -62,9 +62,15 @@ const autoMaintenance = new AutoMaintenanceManager(browsers, db);
 const InstanceAutoCloseManager = require('./instanceAutoCloseManager');
 const autoCloseManager = new InstanceAutoCloseManager(browsers, db);
 
+// 启动登录状态监控管理器
+const LoginStatusMonitor = require('./loginStatusMonitor');
+const loginMonitor = new LoginStatusMonitor(browsers, db);
+loginMonitor.start();
+
 // 将管理器设为全局可访问
 global.autoMaintenance = autoMaintenance;
 global.autoCloseManager = autoCloseManager;
+global.loginMonitor = loginMonitor;
 
 // 挂载 /browsers 路由
 const browsersRouter = require('./routes/browsers')(browsers, db);
