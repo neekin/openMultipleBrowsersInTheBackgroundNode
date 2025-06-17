@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const config = require('../config');
-const { randomFingerprint, launchBrowser, restoreBrowser } = require('../browserManager');
+const { randomFingerprint, launchBrowser, restoreBrowser, memoryOptimizer } = require('../browserManager');
 
 // 工具函数：安全删除目录
 function removeDirectory(dir) {
@@ -41,7 +41,24 @@ module.exports = function(browsers, db) {
       const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url });
       const pages = [page];
       setupBrowserEvents(browser, pages, id, browsers);
-      browsers[id] = { browser, pages, activePageIdx: 0, fingerprint, wsEndpoint: browser.wsEndpoint(), createdAt: new Date().toISOString(), userDataDir };
+      browsers[id] = { 
+        id, // 添加id字段
+        browser, 
+        pages, 
+        activePageIdx: 0, 
+        fingerprint, 
+        wsEndpoint: browser.wsEndpoint(), 
+        createdAt: new Date().toISOString(), 
+        userDataDir 
+      };
+      
+      // 记录内存统计
+      memoryOptimizer.recordMemoryStats(id, {
+        pageCount: pages.length,
+        createdAt: Date.now(),
+        memoryUsage: process.memoryUsage().heapUsed
+      });
+      
       db.run(
         `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
@@ -112,6 +129,9 @@ module.exports = function(browsers, db) {
         
         // 清理性能监控数据
         performanceManager.cleanupInstance(id);
+        
+        // 清理内存优化数据
+        memoryOptimizer.cleanup(id);
       } else {
         // 不在内存时也尝试删除 userDataDir
         db.get('SELECT * FROM browsers WHERE id = ?', [id], (err, row) => {

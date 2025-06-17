@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const performanceManager = require('./performanceManager');
 const advancedOperationManager = require('./advancedOperationManager');
 const resourceManager = require('./resourceManager');
+const { memoryOptimizer } = require('./browserManager');
 
 // 操作批处理管理器
 class OperationBatcher {
@@ -164,10 +165,20 @@ class ScreenshotManager {
         this.screenshotCount++;
         
         // 记录截图性能指标
-        performanceManager.recordInstanceMetric(this.instanceId, {
+        const screenshotMetric = {
           type: 'screenshot',
           size: screenshotSize,
           responseTime: Date.now() - startTime
+        };
+        
+        performanceManager.recordInstanceMetric(this.instanceId, screenshotMetric);
+        
+        // 记录内存统计
+        memoryOptimizer.recordMemoryStats(this.instanceId, {
+          operation: 'screenshot',
+          size: screenshotSize,
+          timestamp: Date.now(),
+          memoryUsage: process.memoryUsage().heapUsed
         });
         
         return true; // 表示已发送
