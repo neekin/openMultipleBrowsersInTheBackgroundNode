@@ -134,10 +134,30 @@ async function launchBrowser({ userDataDir, fingerprint, url }) {
   await page.setUserAgent(fingerprint.userAgent);
   await page.setViewport(fingerprint.viewport);
   
-  if (url) await page.goto(url, { 
-    waitUntil: 'domcontentloaded', // 优化加载策略
-    timeout: config.resourceOptimization.requestTimeout 
-  });
+  console.log(`设置视口尺寸 (${fingerprint.viewport.width}x${fingerprint.viewport.height})`);
+  
+  if (url) {
+    try {
+      console.log(`开始加载页面: ${url}`);
+      await page.goto(url, { 
+        waitUntil: 'domcontentloaded', // 改回更宽松的加载策略
+        timeout: config.resourceOptimization.requestTimeout 
+      });
+      console.log(`页面加载完成: ${url}`);
+    } catch (error) {
+      console.error(`页面加载失败: ${url}, 错误: ${error.message}`);
+      // 如果加载失败，尝试加载一个简单的默认页面
+      try {
+        await page.goto('data:text/html,<html><body><h1>页面加载失败，点击可正常交互</h1><button onclick="alert(\'点击成功!\')">测试按钮</button></body></html>', {
+          waitUntil: 'domcontentloaded',
+          timeout: 10000
+        });
+        console.log('已加载默认测试页面');
+      } catch (fallbackError) {
+        console.error('加载默认页面也失败:', fallbackError.message);
+      }
+    }
+  }
   
   return { browser, page };
 }

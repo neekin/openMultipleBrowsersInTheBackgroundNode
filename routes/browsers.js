@@ -32,14 +32,26 @@ module.exports = function(browsers, db) {
 
   // 创建 Puppeteer 实例
   router.post('/create', async (req, res) => {
+    let id = null;
+    let browser = null;
+    
     try {
-      const id = crypto.randomUUID();
+      id = crypto.randomUUID();
       const fingerprint = randomFingerprint();
       const userDataDir = path.join(config.browser.userDataDir, id);
       let url = req.body?.url || config.browser.defaultUrl;
-      if (!/^https?:\/\//.test(url)) url = 'https://' + url;
-      const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url });
+      
+      // 规范化URL
+      if (url && url !== config.browser.defaultUrl && !/^https?:\/\//.test(url) && !/^data:/.test(url)) {
+        url = 'https://' + url;
+      }
+      
+      console.log(`创建浏览器实例 ${id}, URL: ${url}`);
+      
+      const { browser: browserInstance, page } = await launchBrowser({ userDataDir, fingerprint, url });
+      browser = browserInstance;
       const pages = [page];
+      
       setupBrowserEvents(browser, pages, id, browsers);
       browsers[id] = { 
         id, // 添加id字段
@@ -63,9 +75,35 @@ module.exports = function(browsers, db) {
         `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
       );
+      
+      console.log(`浏览器实例 ${id} 创建成功`);
       res.json({ id, wsEndpoint: browser.wsEndpoint(), fingerprint });
     } catch (err) {
-      res.status(500).json({ error: err.message });
+      console.error(`创建浏览器实例失败:`, err.message);
+      
+      // 清理资源
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeErr) {
+          console.error('清理浏览器实例失败:', closeErr.message);
+        }
+      }
+      if (id && browsers[id]) {
+        delete browsers[id];
+      }
+      
+      // 返回详细错误信息
+      let errorMessage = err.message;
+      if (err.message.includes('Navigation timeout')) {
+        errorMessage = '页面加载超时，请检查网络连接或尝试其他URL';
+      } else if (err.message.includes('net::ERR_')) {
+        errorMessage = '网络连接失败，请检查URL是否正确';
+      } else if (err.message.includes('Cannot navigate to invalid URL')) {
+        errorMessage = 'URL格式不正确，请输入有效的网址';
+      }
+      
+      res.status(500).json({ error: errorMessage });
     }
   });
 

@@ -20,10 +20,27 @@ class OperationBatcher {
   addOperation(operation) {
     this.pendingOperations.push(operation);
     
+    // 对于点击事件，立即处理
+    if (operation.type === 'click') {
+      this.processBatch();
+      return;
+    }
+    
+    // 对于键盘事件，快速处理
+    if (operation.type === 'keydown' || operation.type === 'keyup') {
+      if (!this.batchTimeout) {
+        this.batchTimeout = setTimeout(() => {
+          this.processBatch();
+        }, 5); // 键盘事件5ms延迟
+      }
+      return;
+    }
+    
+    // 其他操作使用正常延迟
     if (!this.batchTimeout) {
       this.batchTimeout = setTimeout(() => {
         this.processBatch();
-      }, config.websocket.batchTimeout || 50);
+      }, config.websocket.batchTimeout || 10);
     }
   }
 
@@ -60,6 +77,7 @@ class OperationBatcher {
     try {
       switch (type) {
         case 'click':
+          // 移除多余的日志
           await this.page.mouse.click(payload.x, payload.y);
           break;
         case 'mousemove':
@@ -445,21 +463,54 @@ function setupWebSocket(server, browsers) {
         // 处理鼠标和键盘操作
         const operationTypes = ['click', 'mousemove', 'keydown', 'keyup', 'wheel'];
         if (operationTypes.includes(data.type)) {
-          // 使用高级操作管理器
-          advancedOperationManager.addOperation(id, data);
+          // 对于点击和键盘事件，立即执行
+          if (data.type === 'click' || data.type === 'keydown' || data.type === 'keyup') {
+            try {
+              switch (data.type) {
+                case 'click':
+                  console.log(`立即执行点击 (${id}):`, data.payload);
+                  await page.bringToFront();
+                  await page.mouse.click(data.payload.x, data.payload.y, { delay: 50 });
+                  break;
+                case 'keydown':
+                  console.log(`键盘按下 (${id}):`, data.payload.key);
+                  await page.keyboard.down(data.payload.key);
+                  break;
+                case 'keyup':
+                  console.log(`键盘释放 (${id}):`, data.payload.key);
+                  await page.keyboard.up(data.payload.key);
+                  break;
+              }
+            } catch (error) {
+              console.error(`操作执行失败 (${id}):`, error.message);
+            }
+          } else {
+            // 鼠标移动和滚轮使用批处理
+            if (operationBatcher) {
+              operationBatcher.addOperation({
+                type: data.type,
+                payload: data.payload
+              });
+            } else {
+              try {
+                switch (data.type) {
+                  case 'mousemove':
+                    await page.mouse.move(data.payload.x, data.payload.y);
+                    inst.lastCursor = data.payload;
+                    break;
+                  case 'wheel':
+                    await page.mouse.wheel({ deltaX: data.payload.deltaX, deltaY: data.payload.deltaY });
+                    break;
+                }
+              } catch (error) {
+                console.error(`操作执行失败 (${id}):`, error.message);
+              }
+            }
+          }
           
           // 记录鼠标位置
           if (data.type === 'mousemove') {
             inst.lastCursor = data.payload;
-          }
-          
-          // 获取预测的下一个操作（用于优化）
-          const prediction = advancedOperationManager.predictNextOperation(id);
-          if (prediction && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ 
-              type: 'prediction', 
-              nextOperation: prediction 
-            }));
           }
         }
       } catch (e) {
