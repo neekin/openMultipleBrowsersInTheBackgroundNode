@@ -401,6 +401,23 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="card maintenance-card">
+                    <div class="card-header">
+                        <div class="card-title">自动维护</div>
+                        <div class="card-icon">🔧</div>
+                    </div>
+                    <div id="maintenanceMetrics">
+                        <div class="loading">
+                            <div class="spinner"></div>
+                            <div>加载中...</div>
+                        </div>
+                    </div>
+                    <div class="card-actions" style="margin-top: 15px;">
+                        <button class="btn btn-primary" onclick="triggerMaintenanceCheck()">触发检查</button>
+                        <button class="btn btn-secondary" onclick="refreshMaintenanceStats()">刷新状态</button>
+                    </div>
+                </div>
             </div>
 
             <div class="card">
@@ -531,6 +548,10 @@
 
                 updateSystemMetrics(systemData);
                 updatePerformanceMetrics(performanceData);
+                updateInstanceMetrics(operationsData);
+                
+                // 加载自动维护统计
+                loadMaintenanceStats();
                 updateInstanceMetrics(systemData.instances);
                 updateAlertsMetrics(systemData.alerts);
 
@@ -785,6 +806,110 @@
         window.addEventListener('beforeunload', function() {
             if (refreshInterval) clearInterval(refreshInterval);
         });
+
+        // 自动维护相关函数
+        async function loadMaintenanceStats() {
+            try {
+                const response = await fetch('/api/browsers/maintenance/stats');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateMaintenanceMetrics(data);
+                } else {
+                    document.getElementById('maintenanceMetrics').innerHTML = 
+                        `<div class="alert alert-warning">维护服务未启动: ${data.error}</div>`;
+                }
+            } catch (error) {
+                document.getElementById('maintenanceMetrics').innerHTML = 
+                    `<div class="alert alert-critical">加载维护统计失败: ${error.message}</div>`;
+            }
+        }
+
+        function updateMaintenanceMetrics(data) {
+            const html = `
+                <div class="metric-row">
+                    <span class="metric-label">维护队列</span>
+                    <span class="metric-value">${data.queueLength} 个实例</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">正在维护</span>
+                    <span class="metric-value">${data.runningMaintenance.length} 个实例</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">检查间隔</span>
+                    <span class="metric-value">${data.config.checkIntervalMinutes} 分钟</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">非活跃阈值</span>
+                    <span class="metric-value">${data.config.inactiveThresholdMinutes} 分钟</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">维护时长</span>
+                    <span class="metric-value">${data.config.maintenanceDurationMinutes} 分钟</span>
+                </div>
+                ${data.runningMaintenance.length > 0 ? `
+                <div class="alert alert-info">
+                    <strong>正在维护的实例：</strong><br>
+                    ${data.runningMaintenance.join('<br>')}
+                </div>
+                ` : ''}
+                <div class="metric-row">
+                    <span class="metric-label">最后检查</span>
+                    <span class="metric-value">${new Date(data.lastCheck).toLocaleString()}</span>
+                </div>
+            `;
+            document.getElementById('maintenanceMetrics').innerHTML = html;
+        }
+
+        async function triggerMaintenanceCheck() {
+            try {
+                const button = event.target;
+                button.disabled = true;
+                button.textContent = '检查中...';
+                
+                const response = await fetch('/api/browsers/maintenance/trigger', {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (response.ok) {
+                    updateMaintenanceMetrics(data.stats);
+                    showNotification('维护检查已触发', 'success');
+                } else {
+                    showNotification(`触发失败: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showNotification(`触发失败: ${error.message}`, 'error');
+            } finally {
+                const button = event.target;
+                button.disabled = false;
+                button.textContent = '触发检查';
+            }
+        }
+
+        function refreshMaintenanceStats() {
+            document.getElementById('maintenanceMetrics').innerHTML = 
+                '<div class="loading"><div class="spinner"></div><div>加载中...</div></div>';
+            loadMaintenanceStats();
+        }
+
+        // 通知函数
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type === 'success' ? 'info' : 'critical'}`;
+            notification.textContent = message;
+            notification.style.position = 'fixed';
+            notification.style.top = '20px';
+            notification.style.right = '20px';
+            notification.style.zIndex = '9999';
+            notification.style.maxWidth = '300px';
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                document.body.removeChild(notification);
+            }, 3000);
+        }
 
         // 其他功能函数的占位符
         function refreshInstances() {

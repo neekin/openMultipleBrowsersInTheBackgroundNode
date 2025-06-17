@@ -30,104 +30,6 @@ function setupBrowserEvents(browser, pages, id, browsers) {
 module.exports = function(browsers, db) {
   const router = express.Router();
 
-  // 实例数量限制管理
-  const INSTANCE_LIMIT = 3; // 最大同时运行实例数
-
-  async function enforceInstanceLimit() {
-    // 获取当前在线实例
-    const onlineInstances = [];
-    for (const [id, inst] of Object.entries(browsers)) {
-      // 更严格的在线判断：有浏览器实例且进程未被杀死且明确标记为在线
-      const isOnline = inst.browser && 
-                      !inst.browser.process()?.killed && 
-                      inst.online === true;
-      
-      if (isOnline) {
-        onlineInstances.push({
-          id: id,
-          instance: inst,
-          createdAt: new Date(inst.createdAt).getTime()
-        });
-      }
-      
-      console.log(`🔍 实例 ${id.substr(0, 8)}: 浏览器=${!!inst.browser}, 进程存活=${inst.browser && !inst.browser.process()?.killed}, 状态=${inst.online === true ? '在线' : '离线'} -> ${isOnline ? '计入' : '跳过'}`);
-    }
-
-    console.log(`🔍 当前在线实例数: ${onlineInstances.length}, 限制: ${INSTANCE_LIMIT}`);
-
-    // 如果超过限制，关闭最早创建的实例
-    if (onlineInstances.length >= INSTANCE_LIMIT) {
-      // 按创建时间排序，最早的在前面
-      onlineInstances.sort((a, b) => a.createdAt - b.createdAt);
-      
-      const toClose = onlineInstances.slice(0, onlineInstances.length - INSTANCE_LIMIT + 1);
-      
-      for (const { id, instance } of toClose) {
-        console.log(`🔐 实例数量达到限制 (${INSTANCE_LIMIT})，关闭最早的实例: ${id}`);
-        
-        try {
-          // 关闭浏览器
-          if (instance.browser && !instance.browser.process()?.killed) {
-            await instance.browser.close();
-          }
-          
-          // 关闭所有页面
-          if (instance.pages) {
-            for (const page of instance.pages) {
-              try {
-                await page.close();
-              } catch (e) {
-                // 忽略页面关闭错误
-              }
-            }
-          }
-          
-          // 关闭WebSocket连接
-          if (instance.wsList) {
-            for (const ws of instance.wsList) {
-              try {
-                ws.close();
-              } catch (e) {
-                // 忽略WebSocket关闭错误
-              }
-            }
-          }
-          
-          // 标记为离线状态但保留数据库记录
-          instance.online = false;
-          instance.lastClosed = new Date().toISOString();
-          
-          // 更新数据库中的 online 状态和最后活跃时间，但不删除记录
-          db.run(
-            'UPDATE browsers SET online = 0, lastActiveTime = ? WHERE id = ?',
-            [Date.now(), id],
-            (err) => {
-              if (err) {
-                console.error(`更新实例 ${id} 状态失败:`, err.message);
-              } else {
-                console.log(`📝 实例 ${id} 数据库状态已更新为离线`);
-              }
-            }
-          );
-          
-          // 清理性能监控数据
-          const performanceManager = require('../performanceManager');
-          performanceManager.cleanupInstance(id);
-          
-          // 取消自动关闭计时器
-          if (global.autoCloseManager) {
-            global.autoCloseManager.cancelAutoClose(id);
-          }
-          
-          console.log(`✅ 实例 ${id} 已被自动关闭（超过数量限制），数据库记录已保留`);
-          
-        } catch (error) {
-          console.error(`❌ 关闭实例 ${id} 时出错:`, error.message);
-        }
-      }
-    }
-  }
-
   // ==================== 静态路径（优先级最高）====================
   
   // 获取实例列表（内存+数据库）
@@ -138,28 +40,12 @@ module.exports = function(browsers, db) {
       const memMap = new Map(Object.entries(browsers));
       const list = rows.map(row => {
         const mem = memMap.get(row.id);
-        
-        // 更准确的在线状态判断
-        let online = false;
-        if (mem) {
-          // 检查浏览器进程是否存活且明确标记为在线
-          online = mem.browser && 
-                   !mem.browser.process()?.killed && 
-                   mem.online === true;
-        }
-        
         return {
           id: row.id,
           wsEndpoint: mem?.wsEndpoint || row.wsEndpoint,
           userAgent: row.userAgent,
           createdAt: row.createdAt || '',
-          lastActiveTime: row.lastActiveTime || null,
-          online: online,
-          // 添加更多状态信息用于调试
-          memoryExists: !!mem,
-          browserExists: !!(mem?.browser),
-          processAlive: mem?.browser ? !mem.browser.process()?.killed : false,
-          markedOnline: mem?.online !== false
+          online: !!mem
         };
       });
       res.json(list);
@@ -169,9 +55,6 @@ module.exports = function(browsers, db) {
   // 创建 Puppeteer 实例
   router.post('/create', async (req, res) => {
     try {
-      // 检查并管理实例数量限制
-      await enforceInstanceLimit();
-      
       const id = crypto.randomUUID();
       const fingerprint = randomFingerprint();
       const userDataDir = path.join(config.browser.userDataDir, id);
@@ -180,26 +63,11 @@ module.exports = function(browsers, db) {
       const { browser, page } = await launchBrowser({ userDataDir, fingerprint, url });
       const pages = [page];
       setupBrowserEvents(browser, pages, id, browsers);
-      browsers[id] = { 
-        browser, 
-        pages, 
-        activePageIdx: 0, 
-        fingerprint, 
-        wsEndpoint: browser.wsEndpoint(), 
-        createdAt: new Date().toISOString(), 
-        userDataDir,
-        online: true // 明确标记为在线状态
-      };
+      browsers[id] = { browser, pages, activePageIdx: 0, fingerprint, wsEndpoint: browser.wsEndpoint(), createdAt: new Date().toISOString(), userDataDir };
       db.run(
-        `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url, online) VALUES (?, ?, ?, ?, ?, ?, ?, 1)`,
+        `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [id, fingerprint.userAgent, JSON.stringify(fingerprint.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
       );
-      
-      // 注册到自动关闭管理器
-      if (global.autoCloseManager) {
-        global.autoCloseManager.registerNewInstance(id);
-      }
-      
       res.json({ id, wsEndpoint: browser.wsEndpoint(), fingerprint });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -234,7 +102,91 @@ module.exports = function(browsers, db) {
     res.json(operationStats);
   });
 
-  // ==================== 通用静态路径 ====================
+  // ==================== 抖音专用静态路径 ====================
+  
+  // 抖音专用统计 API
+  router.get('/douyin/stats', async (req, res) => {
+    try {
+      const { douyinManager } = require('../browserManager');
+      const stats = await douyinManager.getDouyinStats();
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 抖音维护 API
+  router.post('/douyin/maintenance', async (req, res) => {
+    try {
+      const { douyinManager } = require('../browserManager');
+      await douyinManager.performDouyinMaintenance();
+      res.json({ success: true, message: '抖音维护完成' });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // 创建抖音专用实例 API
+  router.post('/douyin/create', async (req, res) => {
+    try {
+      const { douyinManager } = require('../browserManager');
+      const canCreate = douyinManager.canCreateNewInstance();
+      if (!canCreate.allowed) {
+        return res.status(429).json({ 
+          error: canCreate.reason,
+          details: canCreate
+        });
+      }
+
+      const id = crypto.randomUUID();
+      const userDataDir = path.join(config.browser.userDataDir, id);
+      let url = req.body?.url || 'https://www.douyin.com';
+      if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+
+      const { browser, instanceId } = await douyinManager.createDouyinOptimizedBrowser({
+        userDataDir,
+        instanceId: id
+      });
+
+      const page = await douyinManager.createDouyinOptimizedPage(browser);
+
+      // 导航到抖音并处理登录
+      const navResult = await douyinManager.navigateToDouyinWithLogin(page, { url });
+      
+      // 启动登录保活
+      await douyinManager.keepLoginActive(page);
+
+      const pages = [page];
+      setupBrowserEvents(browser, pages, id, browsers);
+      
+      browsers[id] = { 
+        browser, 
+        pages, 
+        activePageIdx: 0, 
+        fingerprint: config.douyin.fingerprint,
+        wsEndpoint: browser.wsEndpoint(), 
+        createdAt: new Date().toISOString(), 
+        userDataDir,
+        isDouyinOptimized: true,
+        loginStatus: navResult.loginStatus
+      };
+
+      db.run(
+        `INSERT OR REPLACE INTO browsers (id, userAgent, viewport, wsEndpoint, createdAt, userDataDir, url) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [id, config.douyin.userAgent, JSON.stringify(config.douyin.viewport), browser.wsEndpoint(), new Date().toISOString(), userDataDir, url]
+      );
+
+      res.json({ 
+        id, 
+        message: '抖音专用实例创建成功',
+        wsEndpoint: browser.wsEndpoint(), 
+        createdAt: new Date().toISOString(),
+        loginStatus: navResult.loginStatus
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // ==================== 内存管理静态路径 ====================
   
@@ -326,176 +278,6 @@ module.exports = function(browsers, db) {
       } else {
         res.status(404).json({ error: '实例不存在或无法休眠' });
       }
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 自动维护统计
-  router.get('/maintenance/stats', (req, res) => {
-    try {
-      const stats = global.autoMaintenance ? global.autoMaintenance.getMaintenanceStats() : null;
-      if (!stats) {
-        return res.status(503).json({ error: '自动维护管理器未启动' });
-      }
-      res.json(stats);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 手动触发维护检查
-  router.post('/maintenance/trigger', async (req, res) => {
-    try {
-      if (!global.autoMaintenance) {
-        return res.status(503).json({ error: '自动维护管理器未启动' });
-      }
-      
-      const stats = await global.autoMaintenance.triggerMaintenanceCheck();
-      res.json({
-        success: true,
-        message: '维护检查已触发',
-        stats
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-  
-  // 调整维护配置（仅用于测试）
-  router.post('/maintenance/config', (req, res) => {
-    try {
-      if (!global.autoMaintenance) {
-        return res.status(503).json({ error: '自动维护管理器未启动' });
-      }
-      
-      const { checkInterval, inactiveThreshold, maintenanceDuration } = req.body;
-      
-      if (checkInterval) {
-        global.autoMaintenance.config.checkInterval = checkInterval * 60000; // 分钟转换为毫秒
-      }
-      if (inactiveThreshold) {
-        global.autoMaintenance.config.inactiveThreshold = inactiveThreshold * 60000;
-      }
-      if (maintenanceDuration) {
-        global.autoMaintenance.config.maintenanceDuration = maintenanceDuration * 60000;
-      }
-      
-      res.json({
-        success: true,
-        message: '维护配置已更新',
-        config: {
-          checkIntervalMinutes: global.autoMaintenance.config.checkInterval / 60000,
-          inactiveThresholdMinutes: global.autoMaintenance.config.inactiveThreshold / 60000,
-          maintenanceDurationMinutes: global.autoMaintenance.config.maintenanceDuration / 60000
-        }
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-  
-  // ==================== 实例数量限制管理 API ====================
-  
-  // 获取实例限制状态
-  router.get('/limit/status', (req, res) => {
-    try {
-      // 获取当前在线实例
-      const onlineInstances = [];
-      for (const [id, inst] of Object.entries(browsers)) {
-        if (inst.browser && !inst.browser.process()?.killed) {
-          onlineInstances.push({
-            id: id,
-            createdAt: inst.createdAt,
-            hasConnections: inst.wsList ? inst.wsList.length > 0 : false,
-            connectionCount: inst.wsList ? inst.wsList.length : 0
-          });
-        }
-      }
-
-      // 按创建时间排序
-      onlineInstances.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-      res.json({
-        limit: INSTANCE_LIMIT,
-        currentCount: onlineInstances.length,
-        instances: onlineInstances,
-        canCreateNew: onlineInstances.length < INSTANCE_LIMIT,
-        nextToClose: onlineInstances.length >= INSTANCE_LIMIT ? onlineInstances[0].id : null
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 手动触发实例限制检查
-  router.post('/limit/enforce', async (req, res) => {
-    try {
-      console.log('🔧 手动触发实例限制检查...');
-      await enforceInstanceLimit();
-      res.json({ success: true, message: '实例限制检查已执行' });
-    } catch (err) {
-      console.error('实例限制检查失败:', err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ==================== 自动关闭管理 API ====================
-  
-  // 获取自动关闭统计信息
-  router.get('/autoclose/stats', (req, res) => {
-    try {
-      if (!global.autoCloseManager) {
-        return res.status(503).json({ error: '自动关闭管理器未启动' });
-      }
-      
-      const stats = global.autoCloseManager.getStats();
-      res.json(stats);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 更新自动关闭配置
-  router.post('/autoclose/config', (req, res) => {
-    try {
-      if (!global.autoCloseManager) {
-        return res.status(503).json({ error: '自动关闭管理器未启动' });
-      }
-      
-      const { noConnectionTimeout, checkInterval } = req.body;
-      
-      const updateConfig = {};
-      if (noConnectionTimeout) updateConfig.noConnectionTimeout = noConnectionTimeout;
-      if (checkInterval) updateConfig.checkInterval = checkInterval;
-      
-      global.autoCloseManager.updateConfig(updateConfig);
-      
-      res.json({
-        success: true,
-        message: '自动关闭配置已更新',
-        config: global.autoCloseManager.getStats().config
-      });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 手动取消指定实例的自动关闭
-  router.post('/autoclose/cancel/:id', (req, res) => {
-    try {
-      if (!global.autoCloseManager) {
-        return res.status(503).json({ error: '自动关闭管理器未启动' });
-      }
-      
-      const id = req.params.id;
-      const cancelled = global.autoCloseManager.cancelAutoClose(id);
-      
-      res.json({
-        success: true,
-        cancelled,
-        message: cancelled ? '已取消自动关闭' : '该实例没有待处理的自动关闭任务'
-      });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -616,19 +398,42 @@ module.exports = function(browsers, db) {
     });
   });
 
+  // 检查抖音登录状态 API
+  router.get('/:id/douyin/login-status', async (req, res) => {
+    const inst = browsers[req.params.id];
+    if (!inst) return res.status(404).json({ error: 'not found' });
+    
+    try {
+      const { douyinManager } = require('../browserManager');
+      const page = inst.pages[inst.activePageIdx || 0];
+      
+      if (!page) {
+        return res.json({ error: 'no active page' });
+      }
+      
+      const loginStatus = await douyinManager.checkDouyinLoginStatus(page);
+      res.json({
+        instanceId: req.params.id,
+        loginStatus,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // 智能启动实例
   router.post('/:id/smart-start', async (req, res) => {
     const id = req.params.id;
     const inst = browsers[id];
+    
     if (!inst) {
       return res.status(404).json({ error: 'not found' });
     }
+
     try {
-      // 唤醒前先执行实例数量限制
-      if (global.enforceInstanceLimit) {
-        await global.enforceInstanceLimit();
-      }
       const status = checkInstanceStatus(inst);
+      
       if (status.online) {
         return res.json({ 
           success: true, 
@@ -636,14 +441,17 @@ module.exports = function(browsers, db) {
           status: 'already_running' 
         });
       }
+
       // 智能启动实例
       const { browser, pages } = await smartStartInstance(id, inst, db);
+      
       // 更新实例数据
       inst.browser = browser;
       inst.pages = pages;
       inst.online = true;
       inst.lastStarted = new Date().toISOString();
       inst.wsEndpoint = browser.wsEndpoint();
+
       res.json({
         success: true,
         message: '实例启动成功',
@@ -707,15 +515,13 @@ module.exports = function(browsers, db) {
     if (browsers[id]) {
       return res.json({ success: false, message: '实例已存在' });
     }
+
     db.get('SELECT * FROM browsers WHERE id = ?', [id], async (err, row) => {
       if (err || !row) {
         return res.status(404).json({ error: 'not found in database' });
       }
+
       try {
-        // 恢复前先执行实例数量限制
-        if (global.enforceInstanceLimit) {
-          await global.enforceInstanceLimit();
-        }
         const { browser, pages } = await restoreBrowser(row);
         setupBrowserEvents(browser, pages, id, browsers);
         browsers[id] = {
@@ -725,8 +531,7 @@ module.exports = function(browsers, db) {
           fingerprint: { userAgent: row.userAgent, viewport: JSON.parse(row.viewport) },
           wsEndpoint: browser.wsEndpoint(),
           createdAt: row.createdAt,
-          userDataDir: row.userDataDir,
-          online: true
+          userDataDir: row.userDataDir
         };
         res.json({ success: true, wsEndpoint: browser.wsEndpoint() });
       } catch (restoreErr) {

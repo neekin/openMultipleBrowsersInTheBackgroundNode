@@ -116,11 +116,67 @@ async function restoreAllBrowsers(db, browsers) {
   });
 }
 
+// 检查浏览器实例状态
+function checkInstanceStatus(instance) {
+  if (!instance || !instance.browser) {
+    return { online: false, reason: '实例不存在或浏览器未创建' };
+  }
+  
+  try {
+    const process = instance.browser.process();
+    if (!process || process.killed) {
+      return { online: false, reason: '浏览器进程已终止' };
+    }
+    
+    return { online: true, reason: '实例正常运行' };
+  } catch (error) {
+    return { online: false, reason: `检查状态时出错: ${error.message}` };
+  }
+}
+
+// 智能启动实例
+async function smartStartInstance(instanceId, instanceData, db) {
+  try {
+    console.log(`开始智能启动实例: ${instanceId}`);
+    
+    // 从数据库获取实例配置
+    return new Promise((resolve, reject) => {
+      db.get('SELECT * FROM browsers WHERE id = ?', [instanceId], async (err, row) => {
+        if (err || !row) {
+          return reject(new Error('实例配置不存在'));
+        }
+        
+        try {
+          const { browser, pages } = await restoreBrowser(row);
+          
+          // 更新实例状态
+          if (instanceData) {
+            instanceData.browser = browser;
+            instanceData.pages = pages;
+            instanceData.online = true;
+            instanceData.lastStarted = new Date().toISOString();
+          }
+          
+          console.log(`实例 ${instanceId} 智能启动成功`);
+          resolve({ browser, pages });
+        } catch (restoreError) {
+          reject(restoreError);
+        }
+      });
+    });
+  } catch (error) {
+    console.error(`智能启动实例 ${instanceId} 失败:`, error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   randomFingerprint,
   launchBrowser,
   restoreBrowser,
   restoreAllBrowsers,
   detectChromiumPath,
-  chromiumPath
+  chromiumPath,
+  checkInstanceStatus,
+  smartStartInstance
 };

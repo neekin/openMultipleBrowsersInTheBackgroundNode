@@ -15,6 +15,10 @@ const browsers = {};
 
 // SQLite 数据库
 const db = new sqlite3.Database(config.database.path);
+
+// 设置全局数据库引用，供WebSocket管理器使用
+global.db = db;
+
 db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS browsers (
     id TEXT PRIMARY KEY,
@@ -23,14 +27,44 @@ db.serialize(() => {
     wsEndpoint TEXT,
     createdAt TEXT,
     userDataDir TEXT,
-    url TEXT
+    url TEXT,
+    lastActiveTime TEXT,
+    online INTEGER DEFAULT 1
   )`);
+  
+  // 为现有记录添加lastActiveTime字段（如果不存在）
+  db.run(`ALTER TABLE browsers ADD COLUMN lastActiveTime TEXT`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('添加lastActiveTime字段失败:', err.message);
+    }
+  });
+  
+  // 为现有记录添加online字段（如果不存在）
+  db.run(`ALTER TABLE browsers ADD COLUMN online INTEGER DEFAULT 1`, (err) => {
+    if (err && !err.message.includes('duplicate column')) {
+      console.error('添加online字段失败:', err.message);
+    } else {
+      console.log('数据库表结构已更新，包含online字段');
+    }
+  });
 });
 
 // 恢复历史实例
 (async () => {
   await restoreAllBrowsers(db, browsers);
 })();
+
+// 启动自动维护管理器
+const AutoMaintenanceManager = require('./autoMaintenanceManager');
+const autoMaintenance = new AutoMaintenanceManager(browsers, db);
+
+// 启动实例自动关闭管理器
+const InstanceAutoCloseManager = require('./instanceAutoCloseManager');
+const autoCloseManager = new InstanceAutoCloseManager(browsers, db);
+
+// 将管理器设为全局可访问
+global.autoMaintenance = autoMaintenance;
+global.autoCloseManager = autoCloseManager;
 
 // 挂载 /browsers 路由
 const browsersRouter = require('./routes/browsers')(browsers, db);

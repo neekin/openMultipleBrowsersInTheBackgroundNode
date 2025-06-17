@@ -248,7 +248,7 @@ function setupWebSocket(server, browsers) {
     });
   });
 
-  wss.on('connection', (ws, req) => {
+  wss.on('connection', async (ws, req) => {
     const url = req.url;
     const match = url.match(/\/browsers\/ws\/operate\/(.+)$/);
     if (!match) {
@@ -264,6 +264,45 @@ function setupWebSocket(server, browsers) {
     }
     
     console.log(`WebSocket连接建立，实例ID: ${id}`);
+    
+    // 智能实例管理：检查实例是否需要启动
+    if (inst.online === false || (inst.browser && inst.browser.process()?.killed)) {
+      console.log(`实例 ${id} 处于离线状态，准备自动启动...`);
+      try {
+        // 先强制执行实例数量限制
+        if (global.enforceInstanceLimit) {
+          await global.enforceInstanceLimit();
+        }
+        const { smartStartInstance } = require('./browserManager');
+        await smartStartInstance(id, inst, global.db || null);
+        console.log(`实例 ${id} 自动启动成功`);
+      } catch (error) {
+        console.error(`尝试启动实例 ${id} 时出错:`, error.message);
+      }
+    } else {
+      inst.online = true;
+    }
+    
+    // 记录WebSocket连接建立时的活跃时间
+    inst.lastActiveTime = Date.now();
+    inst.online = true; // 确保在线状态正确
+    console.log(`🔗 实例 ${id} WebSocket连接建立，活跃时间已更新: ${inst.lastActiveTime}`);
+    
+    // 更新数据库中的在线状态和最后活跃时间
+    if (global.db) {
+      global.db.run(
+        `UPDATE browsers SET online = 1, lastActiveTime = ? WHERE id = ?`,
+        [inst.lastActiveTime, id],
+        (err) => {
+          if (err) {
+            console.error(`更新实例 ${id} 连接时状态失败:`, err.message);
+          } else {
+            console.log(`📝 实例 ${id} 数据库状态已更新为在线`);
+          }
+        }
+      );
+    }
+    
     let activeIdx = inst.activePageIdx || 0;
 
     // 初始化高级管理器
@@ -330,6 +369,11 @@ function setupWebSocket(server, browsers) {
 
     if (!inst.wsList) inst.wsList = [];
     inst.wsList.push(ws);
+    
+    // 通知自动关闭管理器：实例已连接
+    if (global.autoCloseManager) {
+      global.autoCloseManager.onInstanceConnected(id);
+    }
 
     ws.on('close', () => {
       closed = true;
@@ -337,6 +381,23 @@ function setupWebSocket(server, browsers) {
         clearTimeout(screenshotTimeout);
       }
       if (inst.wsList) inst.wsList = inst.wsList.filter(w => w !== ws);
+      
+      // 记录实例最后活跃时间
+      inst.lastActiveTime = Date.now();
+      console.log(`📝 实例 ${id} 最后活跃时间已记录: ${inst.lastActiveTime}`);
+      
+      // 更新数据库中的最后活跃时间
+      if (global.db) {
+        global.db.run(
+          `UPDATE browsers SET lastActiveTime = ? WHERE id = ?`,
+          [inst.lastActiveTime, id],
+          (err) => {
+            if (err) {
+              console.error(`更新实例 ${id} 最后活跃时间失败:`, err.message);
+            }
+          }
+        );
+      }
       
       // 清理高级管理器
       advancedOperationManager.cleanupInstance(id);
@@ -348,11 +409,50 @@ function setupWebSocket(server, browsers) {
       console.log(`WebSocket连接关闭 (${id})，性能统计:`, {
         screenshots: screenshotManager.screenshotCount,
         avgResponseTime: stats?.averageResponseTime || 0,
-        bandwidth: stats?.bandwidth || 0,
-        errors: stats?.errors || 0,
-        memoryUsage: resourceStats?.memoryUsage || 0,
-        operationCount: resourceStats?.operationCount || 0
+        wsConnections: inst.wsList ? inst.wsList.length : 0
       });
+      
+      // 智能实例管理：如果没有WebSocket连接，自动关闭浏览器实例
+      if (inst.wsList && inst.wsList.length === 0) {
+        console.log(`实例 ${id} 无WebSocket连接，准备自动关闭...`);
+        
+        // 通知自动关闭管理器：实例已断开连接
+        if (global.autoCloseManager) {
+          global.autoCloseManager.onInstanceDisconnected(id);
+        }
+        
+        setTimeout(async () => {
+          // 延迟5秒后检查，如果仍然没有连接则关闭
+          if (inst.wsList && inst.wsList.length === 0) {
+            console.log(`实例 ${id} 确认无连接，自动关闭浏览器实例`);
+            try {
+              if (inst.browser && !inst.browser.process()?.killed) {
+                await inst.browser.close();
+              }
+              // 保持数据库记录，但标记为离线状态
+              inst.online = false;
+              inst.lastClosed = new Date().toISOString();
+              
+              // 更新数据库中的离线状态
+              if (global.db) {
+                global.db.run(
+                  `UPDATE browsers SET online = 0, lastActiveTime = ? WHERE id = ?`,
+                  [Date.now(), id],
+                  (err) => {
+                    if (err) {
+                      console.error(`更新实例 ${id} 离线状态失败:`, err.message);
+                    } else {
+                      console.log(`📝 实例 ${id} 数据库状态已更新为离线`);
+                    }
+                  }
+                );
+              }
+            } catch (error) {
+              console.error(`关闭实例 ${id} 失败:`, error.message);
+            }
+          }
+        }, 5000); // 5秒延迟关闭，防止频繁开关
+      }
     });
 
     ws.on('message', async msg => {
@@ -366,6 +466,20 @@ function setupWebSocket(server, browsers) {
 
         // 更新活动时间（用于自适应截图间隔）
         screenshotManager.updateActivity();
+        
+        // 更新实例最后活跃时间到数据库（WebSocket 收到消息时）
+        if (global.db) {
+          const now = Date.now();
+          global.db.run(
+            'UPDATE browsers SET lastActiveTime = ? WHERE id = ?',
+            [now, id],
+            (err) => {
+              if (err) {
+                console.error(`更新实例 ${id} 消息处理时活跃时间失败:`, err.message);
+              }
+            }
+          );
+        }
 
         if (data.type === 'switchTab') {
           if (typeof data.idx === 'number' && inst.pages[data.idx]) {
