@@ -500,6 +500,47 @@ module.exports = function(browsers, db) {
     }
   });
 
+  // ==================== 登录监控路径（静态路径，优先级高）====================
+  
+  // 获取登录监控统计
+  router.get('/login-monitor/stats', (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    const stats = global.loginMonitor.getMonitorStats();
+    res.json(stats);
+  });
+
+  // 手动触发登录状态检测
+  router.post('/login-monitor/trigger', async (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    try {
+      const instanceId = req.body.instanceId || null;
+      const result = await global.loginMonitor.triggerCheck(instanceId);
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // 更新登录监控配置
+  router.post('/login-monitor/config', (req, res) => {
+    if (!global.loginMonitor) {
+      return res.status(500).json({ error: 'Login monitor not available' });
+    }
+    
+    try {
+      global.loginMonitor.updateConfig(req.body);
+      res.json({ success: true, message: '配置已更新' });
+    } catch (error) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ==================== 动态路径（优先级最低）====================
   
   // 检查实例状态
@@ -851,45 +892,6 @@ module.exports = function(browsers, db) {
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ error: err.message });
-    }
-  });
-
-  // 获取登录监控统计
-  router.get('/login-monitor/stats', (req, res) => {
-    if (!global.loginMonitor) {
-      return res.status(500).json({ error: 'Login monitor not available' });
-    }
-    
-    const stats = global.loginMonitor.getMonitorStats();
-    res.json(stats);
-  });
-
-  // 手动触发登录状态检测
-  router.post('/login-monitor/trigger', async (req, res) => {
-    if (!global.loginMonitor) {
-      return res.status(500).json({ error: 'Login monitor not available' });
-    }
-    
-    try {
-      const instanceId = req.body.instanceId || null;
-      const result = await global.loginMonitor.triggerCheck(instanceId);
-      res.json(result);
-    } catch (error) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // 更新登录监控配置
-  router.post('/login-monitor/config', (req, res) => {
-    if (!global.loginMonitor) {
-      return res.status(500).json({ error: 'Login monitor not available' });
-    }
-    
-    try {
-      global.loginMonitor.updateConfig(req.body);
-      res.json({ success: true, message: '配置已更新' });
-    } catch (error) {
-      res.status(500).json({ error: error.message });
     }
   });
 

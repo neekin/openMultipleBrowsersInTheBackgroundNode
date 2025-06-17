@@ -276,6 +276,24 @@
       setTimeout(loadTabs, 300);
     };
 
+    // 添加删除实例函数
+    window.deleteInstance = async function(id) {
+      if (!confirm('确定要删除该实例吗？')) return;
+      const res = await fetch(`/browsers/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        if (instanceId === id) {
+          instanceId = '';
+          document.getElementById('instanceId').innerText = '';
+          if (ws) ws.close();
+        }
+        loadInstanceList();
+        setTimeout(loadTabs, 300);
+        document.getElementById('msg').innerText = '实例已删除';
+      } else {
+        document.getElementById('msg').innerText = '删除失败';
+      }
+    };
+
     document.getElementById('createBtn').onclick = async function() {
       let url = prompt('请输入要打开的URL：', 'https://www.example.com');
       if (!url) return;
@@ -346,8 +364,19 @@
               document.getElementById('msg').innerText = '截图错误: ' + data.error;
             }
             if (data.cursor) {
-              remoteCursor.style.left = (data.cursor.x-10) + 'px';
-              remoteCursor.style.top = (data.cursor.y-10) + 'px';
+              // 将服务器坐标转换为显示坐标
+              const screenImg = document.getElementById('screen');
+              const rect = screenImg.getBoundingClientRect();
+              const naturalWidth = screenImg.naturalWidth > 0 ? screenImg.naturalWidth : 800;
+              const naturalHeight = screenImg.naturalHeight > 0 ? screenImg.naturalHeight : 600;
+              const displayWidth = rect.width;
+              const displayHeight = rect.height;
+              
+              const displayX = Math.round(data.cursor.x * displayWidth / naturalWidth);
+              const displayY = Math.round(data.cursor.y * displayHeight / naturalHeight);
+              
+              remoteCursor.style.left = (displayX-10) + 'px';
+              remoteCursor.style.top = (displayY-10) + 'px';
               remoteCursor.style.display = 'block';
             }
             if (data.type === 'tabUpdate') {
@@ -359,8 +388,29 @@
           } catch {}
         }
       };
-      ws.onclose = () => document.getElementById('msg').innerText = 'WebSocket已关闭';
-      ws.onerror = () => document.getElementById('msg').innerText = 'WebSocket错误';
+      ws.onopen = () => {
+        document.getElementById('msg').innerText = 'WebSocket连接成功';
+        setTimeout(() => {
+          if (document.getElementById('msg').innerText === 'WebSocket连接成功') {
+            document.getElementById('msg').innerText = '';
+          }
+        }, 2000);
+      };
+      ws.onclose = (event) => {
+        const reason = event.wasClean ? '正常关闭' : '连接断开';
+        document.getElementById('msg').innerText = `WebSocket已关闭 (${reason})`;
+        // 尝试重连
+        if (!event.wasClean && instanceId) {
+          setTimeout(() => {
+            console.log('尝试重新连接WebSocket...');
+            startWebSocket();
+          }, 3000);
+        }
+      };
+      ws.onerror = (error) => {
+        console.error('WebSocket错误:', error);
+        document.getElementById('msg').innerText = 'WebSocket连接错误';
+      };
       setTimeout(loadTabs, 300);
     }
 
@@ -387,12 +437,18 @@
     screenImg.addEventListener('mousemove', function(e) {
       if (!ws || ws.readyState !== 1) return;
       const rect = screenImg.getBoundingClientRect();
-      const x = e.offsetX;
-      const y = e.offsetY;
+      // 保持与点击事件相同的坐标计算方式
+      const naturalWidth = screenImg.naturalWidth > 0 ? screenImg.naturalWidth : 800;
+      const naturalHeight = screenImg.naturalHeight > 0 ? screenImg.naturalHeight : 600;
+      const displayWidth = rect.width;
+      const displayHeight = rect.height;
+      // 转换为浏览器实际坐标
+      const x = Math.round(e.offsetX * naturalWidth / displayWidth);
+      const y = Math.round(e.offsetY * naturalHeight / displayHeight);
       ws.send(JSON.stringify({type: 'mousemove', payload: {x, y}}));
-      // 本地显示指针
-      remoteCursor.style.left = (x-10) + 'px';
-      remoteCursor.style.top = (y-10) + 'px';
+      // 本地显示指针（使用显示坐标）
+      remoteCursor.style.left = (e.offsetX-10) + 'px';
+      remoteCursor.style.top = (e.offsetY-10) + 'px';
       remoteCursor.style.display = 'block';
     });
     screenImg.addEventListener('mouseleave', function() {
