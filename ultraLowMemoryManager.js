@@ -124,6 +124,31 @@ class UltraLowMemoryManager {
     }
   }
 
+  // 休眠空闲实例
+  async hibernateIdleInstances(idleThreshold = 30 * 60 * 1000) {
+    const currentTime = Date.now();
+    const idleInstances = [];
+    
+    // 找出空闲的实例
+    for (const [instanceId, instance] of this.browserInstances.entries()) {
+      if (currentTime - instance.lastUsed > idleThreshold) {
+        idleInstances.push(instanceId);
+      }
+    }
+    
+    // 休眠空闲实例
+    for (const instanceId of idleInstances) {
+      try {
+        await this.hibernateInstance(instanceId);
+        console.log(`实例 ${instanceId} 因空闲超过 ${Math.round(idleThreshold / 60000)} 分钟被休眠`);
+      } catch (error) {
+        console.error(`休眠空闲实例 ${instanceId} 失败:`, error.message);
+      }
+    }
+    
+    return idleInstances.length;
+  }
+
   // 创建超低内存实例
   async createUltraLowMemoryBrowser(options = {}) {
     // 检查是否达到限制
